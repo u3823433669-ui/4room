@@ -35,11 +35,14 @@ export function loadLocalTasks(username?: string): Task[] {
   const key = username ? `${LOCAL_STORAGE_KEY}_${username}` : LOCAL_STORAGE_KEY;
   try {
     const raw = localStorage.getItem(key);
-    if (raw) {
+    if (raw !== null) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        const { tasks: escalated } = checkAndEscalateTasks(parsed);
-        return escalated;
+      if (Array.isArray(parsed)) {
+        if (parsed.length > 0) {
+          const { tasks: escalated } = checkAndEscalateTasks(parsed);
+          return escalated;
+        }
+        return [];
       }
     }
   } catch (e) {
@@ -78,6 +81,21 @@ export async function fetchCloudTasks(token: string): Promise<Task[] | null> {
     console.warn('[Cloud Fetch] Error:', err);
   }
   return null;
+}
+
+// Explicit task deletion helper
+export async function deleteCloudTask(taskId: string, token: string | null): Promise<void> {
+  if (!token) return;
+  try {
+    await fetch(`/api/v1/tasks/${taskId}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  } catch (err) {
+    console.warn('[Cloud Delete] Error:', err);
+  }
 }
 
 // Auto-sync debouncer

@@ -201,24 +201,40 @@ app.post('/api/v1/tasks/sync', authenticate, (req, res) => {
       return res.status(400).json({ success: false, error: 'tasks must be an array' });
     }
 
-    // Merge logic
-    const existing = userTasks.get(username) || [];
-    const taskMap = new Map<string, Task>();
-    existing.forEach(t => taskMap.set(t.id, t));
+    // Sanitize and save exact tasks from client (so deletions are properly persisted)
+    const validTasks: Task[] = tasks
+      .filter((t: any) => t && typeof t.id === 'string' && typeof t.title === 'string')
+      .map((t: any) => ({
+        id: String(t.id),
+        title: String(t.title),
+        quadrant: ['q1', 'q2', 'q3', 'q4'].includes(t.quadrant) ? t.quadrant : 'q1',
+        completed: Boolean(t.completed),
+        completedAt: typeof t.completedAt === 'number' ? t.completedAt : (t.completed ? Date.now() : null),
+        dueDate: t.dueDate ? String(t.dueDate) : null,
+        autoEscalatedFrom: t.autoEscalatedFrom || null,
+        createdAt: typeof t.createdAt === 'number' ? t.createdAt : Date.now(),
+        updatedAt: typeof t.updatedAt === 'number' ? t.updatedAt : Date.now(),
+      }));
 
-    tasks.forEach((clientTask: Task) => {
-      if (!clientTask || !clientTask.id) return;
-      const prev = taskMap.get(clientTask.id);
-      if (!prev || (clientTask.updatedAt || 0) >= (prev.updatedAt || 0)) {
-        taskMap.set(clientTask.id, clientTask);
-      }
-    });
-
-    const merged = Array.from(taskMap.values());
-    userTasks.set(username, merged);
+    userTasks.set(username, validTasks);
     saveDb();
 
-    res.json({ success: true, tasks: merged, serverTimestamp: Date.now() });
+    res.json({ success: true, tasks: validTasks, serverTimestamp: Date.now() });
+  } catch (err) {
+    res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+// Explicit task deletion endpoint
+app.delete('/api/v1/tasks/:id', authenticate, (req, res) => {
+  try {
+    const username = (req as unknown as { currentUser: string }).currentUser;
+    const taskId = req.params.id;
+    const existing = userTasks.get(username) || [];
+    const filtered = existing.filter(t => t.id !== taskId);
+    userTasks.set(username, filtered);
+    saveDb();
+    res.json({ success: true, tasks: filtered, serverTimestamp: Date.now() });
   } catch (err) {
     res.status(500).json({ success: false, error: String(err) });
   }

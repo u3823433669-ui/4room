@@ -19,6 +19,7 @@ import {
   clearStoredAuth,
   fetchCloudTasks,
   syncTasksToCloud,
+  deleteCloudTask,
 } from './utils/storage';
 import { checkAndEscalateTasks } from './utils/escalation';
 import { MinimalQuadrant } from './components/MinimalQuadrant';
@@ -57,13 +58,10 @@ export default function App() {
     async function loadCloud() {
       if (authState.token && authState.user) {
         const cloudTasks = await fetchCloudTasks(authState.token);
-        if (cloudTasks && cloudTasks.length > 0) {
+        if (cloudTasks !== null) {
           const { tasks: escalated } = checkAndEscalateTasks(cloudTasks);
           setTasks(escalated);
           saveLocalTasks(escalated, authState.user.username);
-        } else {
-          // If first time cloud is empty, sync current local tasks up
-          syncTasksToCloud(tasks, authState.token, authState.user.username);
         }
       }
     }
@@ -174,6 +172,7 @@ export default function App() {
 
   // Delete task
   const handleDeleteTask = (id: string) => {
+    deleteCloudTask(id, authState.token);
     updateTasks(prev => prev.filter(t => t.id !== id));
   };
 
