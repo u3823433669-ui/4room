@@ -1,0 +1,6 @@
+{
+  "name": "QuadMatrix - 四象限工作记事本与多端同步工作台",
+  "description": "专为高效人士打造的四象限法则（重要-紧急）工作任务记事本，支持自由拖拽排布、本地实时自动持久化、富文本便签备忘、番茄工作法与多维度统计，并内置面向微信小程序与移动App的RESTful/双向差量同步开放接口和文档中心。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

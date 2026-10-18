@@ -1,0 +1,122 @@
+import { Task, User, AuthState } from '../types';
+import { INITIAL_DEMO_TASKS } from './constants';
+import { checkAndEscalateTasks } from './escalation';
+
+const TOKEN_KEY = 'focus_matrix_auth_token';
+const USER_KEY = 'focus_matrix_user';
+const LOCAL_STORAGE_KEY = 'focus_matrix_local_tasks';
+
+export function getStoredAuth(): AuthState {
+  try {
+    const token = localStorage.getItem(TOKEN_KEY);
+    const userRaw = localStorage.getItem(USER_KEY);
+    if (token && userRaw) {
+      const user = JSON.parse(userRaw);
+      return { token, user };
+    }
+  } catch {
+    // ignore
+  }
+  return { token: null, user: null };
+}
+
+export function saveStoredAuth(token: string, user: User): void {
+  localStorage.setItem(TOKEN_KEY, token);
+  localStorage.setItem(USER_KEY, JSON.stringify(user));
+}
+
+export function clearStoredAuth(): void {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(USER_KEY);
+}
+
+// Local cache
+export function loadLocalTasks(username?: string): Task[] {
+  const key = username ? `${LOCAL_STORAGE_KEY}_${username}` : LOCAL_STORAGE_KEY;
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const { tasks: escalated } = checkAndEscalateTasks(parsed);
+        return escalated;
+      }
+    }
+  } catch (e) {
+    console.warn('[Storage] Error loading local tasks:', e);
+  }
+
+  const { tasks: escalatedDemo } = checkAndEscalateTasks(INITIAL_DEMO_TASKS);
+  saveLocalTasks(escalatedDemo, username);
+  return escalatedDemo;
+}
+
+export function saveLocalTasks(tasks: Task[], username?: string): void {
+  const key = username ? `${LOCAL_STORAGE_KEY}_${username}` : LOCAL_STORAGE_KEY;
+  try {
+    localStorage.setItem(key, JSON.stringify(tasks));
+  } catch (e) {
+    console.error('[Storage] Error saving local tasks:', e);
+  }
+}
+
+// Fetch user tasks from cloud server
+export async function fetchCloudTasks(token: string): Promise<Task[] | null> {
+  try {
+    const res = await fetch('/api/v1/tasks', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.tasks)) {
+        return data.tasks;
+      }
+    }
+  } catch (err) {
+    console.warn('[Cloud Fetch] Error:', err);
+  }
+  return null;
+}
+
+// Auto-sync debouncer
+let syncDebounceTimer: NodeJS.Timeout | null = null;
+
+export function syncTasksToCloud(
+  tasks: Task[],
+  token: string | null,
+  username?: string,
+  onRemoteMerged?: (tasks: Task[]) => void
+): void {
+  saveLocalTasks(tasks, username);
+
+  if (!token) return;
+
+  if (syncDebounceTimer) {
+    clearTimeout(syncDebounceTimer);
+  }
+
+  syncDebounceTimer = setTimeout(async () => {
+    try {
+      const res = await fetch('/api/v1/tasks/sync', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ tasks }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.tasks) && onRemoteMerged) {
+          saveLocalTasks(data.tasks, username);
+          onRemoteMerged(data.tasks);
+        }
+      }
+    } catch {
+      // offline fallback is safe in local storage
+    }
+  }, 400);
+}
