@@ -4,5 +4,11 @@
     "username": "testadmin",
     "passwordHash": "170b96148de5a496db020c3aef39e93f64196a52241fce8d346ee60a9665d370",
     "createdAt": 1792324931147
+  },
+  "demo": {
+    "id": "u_1792335264800_43gg",
+    "username": "demo",
+    "passwordHash": "60f7821ae05fe1fdb181fe64a4815e06ddb62fac9480ba19ee5eb46ba8f09e15",
+    "createdAt": 1792335264800
   }
 }

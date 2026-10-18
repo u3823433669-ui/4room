@@ -228,17 +228,6 @@ export default function App() {
 
           {/* Right: Actions */}
           <div className="flex items-center space-x-2 sm:space-x-2.5">
-            {/* Download source code zip button */}
-            <a
-              href="/api/v1/download-zip"
-              download="4room-code.zip"
-              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 shadow-2xs transition-colors cursor-pointer"
-              title="下载项目源码压缩包，解压后可直接拖拽上传到 GitHub"
-            >
-              <span>📦</span>
-              <span className="hidden sm:inline">下载源码</span>
-            </a>
-
             {/* Daily Completion Chart Button */}
             <button
               onClick={() => setIsStatsModalOpen(true)}
