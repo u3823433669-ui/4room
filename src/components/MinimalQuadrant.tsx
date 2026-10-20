@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Plus,
   Trash2,
@@ -8,6 +8,8 @@ import {
   Repeat,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   Sparkles,
   Eye,
@@ -151,6 +153,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
     setSelectedRecurrence('none');
     setSelectedAdvanceDays(null);
     setShowOptionsPanel(false);
+    setCurrentPage(1);
     sound.playPop();
   };
 
@@ -179,12 +182,32 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
     e.dataTransfer.effectAllowed = 'move';
   };
 
+  // Pagination state: default 5 items per page (user can switch to 8 or 全部)
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(5);
+
   // Split tasks into visible matrix tasks vs. hidden upcoming recurring tasks
   const matrixTasks = tasks.filter(t => isTaskVisibleInMatrix(t));
   const hiddenRecurringTasks = tasks.filter(t => !t.completed && !isTaskVisibleInMatrix(t));
 
   const visibleTasks = hideCompleted ? matrixTasks.filter(t => !t.completed) : matrixTasks;
   const count = matrixTasks.filter(t => !t.completed).length;
+
+  const totalVisible = visibleTasks.length;
+  const effectivePageSize = pageSize > 0 ? pageSize : totalVisible || 1;
+  const totalPages = Math.max(1, Math.ceil(totalVisible / effectivePageSize));
+  const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
+
+  // Auto-clamp current page if total pages decreases
+  useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(totalPages);
+    }
+  }, [totalPages, currentPage]);
+
+  const paginatedTasks = pageSize === 0
+    ? visibleTasks
+    : visibleTasks.slice((safeCurrentPage - 1) * pageSize, safeCurrentPage * pageSize);
 
   const startEditing = (task: Task) => {
     setEditingTaskId(task.id);
@@ -222,7 +245,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`flex flex-col h-[440px] sm:h-[480px] rounded-2xl border p-4 transition-all duration-200 ${cardBg} ${borderColor} ${
+      className={`flex flex-col h-[440px] sm:h-[480px] rounded-2xl border p-3.5 sm:p-4 transition-all duration-200 ${cardBg} ${borderColor} ${
         isDragOver ? 'ring-2 ring-indigo-400 bg-indigo-50/20 shadow-md' : 'shadow-2xs'
       }`}
     >
@@ -262,7 +285,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
       </div>
 
       {/* Task List (scrollable) */}
-      <div className="flex-1 overflow-y-auto space-y-2.5 py-1 pr-0.5">
+      <div className="flex-1 overflow-y-auto space-y-1.5 py-1 pr-0.5">
         {visibleTasks.length === 0 && hiddenRecurringTasks.length === 0 ? (
           <div className="h-full flex items-center justify-center text-xs text-slate-400 dark:text-slate-500 italic select-none">
             {isDragOver ? '放置任务到此象限' : '暂无任务，可在下方快速添加'}
@@ -285,7 +308,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
             </button>
           </div>
         ) : (
-          visibleTasks.map(task => {
+          paginatedTasks.map(task => {
             const dueStatus = getDueDateStatus(task.dueDate);
             const isRecurring = task.recurrence && task.recurrence !== 'none';
 
@@ -294,11 +317,11 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                 key={task.id}
                 draggable={true}
                 onDragStart={e => handleDragStart(e, task)}
-                className={`group flex items-center justify-between bg-white dark:bg-slate-800/90 rounded-xl px-3.5 py-3 border border-slate-200/70 dark:border-slate-700/70 shadow-2xs transition-all hover:shadow-xs hover:border-slate-300 dark:hover:border-slate-600 ${
+                className={`group flex items-center justify-between bg-white dark:bg-slate-800/90 rounded-lg px-2.5 py-1.5 sm:px-3 sm:py-2 border border-slate-200/70 dark:border-slate-700/70 shadow-2xs transition-all hover:shadow-xs hover:border-slate-300 dark:hover:border-slate-600 ${
                   task.completed ? 'opacity-60 bg-slate-50/60 dark:bg-slate-800/40' : ''
                 }`}
               >
-                <div className="flex items-center space-x-3 flex-1 min-w-0 mr-2">
+                <div className="flex items-center space-x-2.5 flex-1 min-w-0 mr-1.5">
                   {/* Square outline checkbox */}
                   <button
                     type="button"
@@ -310,17 +333,17 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                         sound.playPop();
                       }
                     }}
-                    className={`w-4 h-4 rounded border flex items-center justify-center transition-colors shrink-0 cursor-pointer ${
+                    className={`w-3.5 h-3.5 sm:w-4 sm:h-4 rounded border flex items-center justify-center transition-colors shrink-0 cursor-pointer ${
                       task.completed
                         ? 'bg-indigo-600 border-indigo-600 text-white'
                         : 'border-slate-300 dark:border-slate-500 hover:border-indigo-500 bg-white dark:bg-slate-900'
                     }`}
                   >
-                    {task.completed && <Check className="w-3 h-3 stroke-[3]" />}
+                    {task.completed && <Check className="w-2.5 h-2.5 sm:w-3 sm:h-3 stroke-[3]" />}
                   </button>
 
                   {/* Task Title (Editable) */}
-                  <div className="flex-1 min-w-0 flex flex-wrap items-center gap-1.5">
+                  <div className="flex-1 min-w-0 flex flex-wrap items-center gap-1 sm:gap-1.5">
                     {editingTaskId === task.id ? (
                       <input
                         type="text"
@@ -332,12 +355,12 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                           if (e.key === 'Enter') saveEditing(task.id);
                           if (e.key === 'Escape') setEditingTaskId(null);
                         }}
-                        className="flex-1 text-xs sm:text-sm bg-transparent border-b border-indigo-500 outline-none text-slate-800 dark:text-slate-100 py-0.5"
+                        className="flex-1 text-xs sm:text-[13px] bg-transparent border-b border-indigo-500 outline-none text-slate-800 dark:text-slate-100 py-0.5"
                       />
                     ) : (
                       <span
                         onClick={() => startEditing(task)}
-                        className={`text-xs sm:text-sm leading-snug break-words cursor-text select-text ${
+                        className={`text-xs sm:text-[13px] leading-tight break-words cursor-text select-text ${
                           task.completed
                             ? 'line-through text-slate-400 dark:text-slate-500'
                             : 'text-slate-800 dark:text-slate-200'
@@ -352,7 +375,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                       <button
                         type="button"
                         onClick={() => openRecurrenceEditor(task)}
-                        className="inline-flex items-center space-x-1 text-[10px] px-1.5 py-0.5 rounded-md font-semibold bg-purple-50 text-purple-700 dark:bg-purple-950/70 dark:text-purple-300 border border-purple-200/80 dark:border-purple-800/60 hover:bg-purple-100 transition-colors cursor-pointer"
+                        className="inline-flex items-center space-x-1 text-[10px] px-1.5 py-0.2 rounded font-semibold bg-purple-50 text-purple-700 dark:bg-purple-950/70 dark:text-purple-300 border border-purple-200/80 dark:border-purple-800/60 hover:bg-purple-100 transition-colors cursor-pointer"
                         title="点击修改循环周期及提前展示规则"
                       >
                         <Repeat className="w-2.5 h-2.5" />
@@ -375,7 +398,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                             changingDateTaskId === task.id ? null : task.id
                           )
                         }
-                        className={`inline-flex items-center space-x-1 text-[10px] px-1.5 py-0.5 rounded-md font-medium cursor-pointer transition-colors ${
+                        className={`inline-flex items-center space-x-1 text-[10px] px-1.5 py-0.2 rounded font-medium cursor-pointer transition-colors ${
                           dueStatus.isOverdue
                             ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/70 dark:text-rose-300 animate-pulse'
                             : dueStatus.isUrgent
@@ -422,7 +445,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                 </div>
 
                 {/* Hover actions: Recurrence set + Date set + Drag handle + delete */}
-                <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="flex items-center space-x-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                   <button
                     type="button"
                     onClick={() => openRecurrenceEditor(task)}
@@ -551,6 +574,102 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
           </div>
         )}
       </div>
+
+      {/* Pagination Bar - shown when there are multiple pages */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between pt-1.5 pb-0.5 px-1 border-t border-slate-200/50 dark:border-slate-700/50 text-xs select-none">
+          <div className="flex items-center space-x-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+            <span>
+              第 <strong className="text-slate-700 dark:text-slate-200 font-semibold">{safeCurrentPage}</strong> / {totalPages} 页
+            </span>
+            <span className="opacity-40">·</span>
+            <span>共 {totalVisible} 条</span>
+          </div>
+
+          <div className="flex items-center space-x-1">
+            {/* Quick page size switcher */}
+            <div className="hidden xs:flex items-center space-x-0.5 mr-1 bg-slate-100/90 dark:bg-slate-800/90 rounded-md p-0.5 text-[10px]">
+              {[5, 8, 0].map(sz => (
+                <button
+                  key={sz}
+                  type="button"
+                  onClick={() => {
+                    setPageSize(sz);
+                    setCurrentPage(1);
+                  }}
+                  className={`px-1.5 py-0.5 rounded transition-all cursor-pointer ${
+                    pageSize === sz
+                      ? 'bg-white dark:bg-slate-700 font-bold text-slate-800 dark:text-slate-100 shadow-2xs'
+                      : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                  }`}
+                  title={sz === 0 ? '显示全部' : `每页 ${sz} 条`}
+                >
+                  {sz === 0 ? '全部' : `${sz}条`}
+                </button>
+              ))}
+            </div>
+
+            {/* Prev button */}
+            <button
+              type="button"
+              disabled={safeCurrentPage <= 1}
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              className="flex items-center space-x-0.5 px-2 py-0.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs"
+              title="上一页"
+            >
+              <ChevronLeft className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">上一页</span>
+            </button>
+
+            {/* Page number buttons */}
+            <div className="flex items-center space-x-0.5">
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map(pageNum => {
+                if (
+                  totalPages > 5 &&
+                  pageNum !== 1 &&
+                  pageNum !== totalPages &&
+                  Math.abs(pageNum - safeCurrentPage) > 1
+                ) {
+                  if (pageNum === 2 || pageNum === totalPages - 1) {
+                    return (
+                      <span key={pageNum} className="text-[10px] text-slate-400 px-0.5">
+                        ..
+                      </span>
+                    );
+                  }
+                  return null;
+                }
+                return (
+                  <button
+                    key={pageNum}
+                    type="button"
+                    onClick={() => setCurrentPage(pageNum)}
+                    className={`w-5 h-5 rounded text-[11px] flex items-center justify-center font-medium transition-colors cursor-pointer ${
+                      safeCurrentPage === pageNum
+                        ? 'bg-indigo-600 text-white font-bold shadow-2xs'
+                        : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    {pageNum}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Next button */}
+            <button
+              type="button"
+              disabled={safeCurrentPage >= totalPages}
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              className="flex items-center space-x-0.5 px-2 py-0.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs"
+              title="下一页"
+            >
+              <span className="hidden sm:inline">下一页</span>
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Inline Recurrence Modal / Editor for existing task */}
       {editingRecurrenceTaskId && (
