@@ -11,6 +11,10 @@ import {
   LogOut,
   Zap,
   Sparkles,
+  Clock,
+  Calendar,
+  ChevronRight,
+  Monitor,
 } from 'lucide-react';
 import { Task, QuadrantId, AuthState, User, RecurrenceType, CountdownItem } from './types';
 import {
@@ -29,7 +33,7 @@ import {
 } from './utils/storage';
 import { checkAndEscalateTasks } from './utils/escalation';
 import { computeNextDueDate } from './utils/recurrence';
-import { calculateCountdownStats } from './utils/countdown';
+import { calculateCountdownStats, getCategoryMeta, formatPercent } from './utils/countdown';
 import { MinimalQuadrant } from './components/MinimalQuadrant';
 import { CompletionStatsModal } from './components/CompletionStatsModal';
 import { CountdownModal } from './components/CountdownModal';
@@ -37,9 +41,10 @@ import { AuthModal } from './components/AuthModal';
 
 export default function App() {
   const [authState, setAuthState] = useState<AuthState>(() => getStoredAuth());
-  const [tasks, setTasks] = useState<Task[]>(() =>
-    loadLocalTasks(authState.user?.username)
-  );
+  const [tasks, setTasks] = useState<Task[]>(() => {
+    const initial = loadLocalTasks(authState.user?.username);
+    return checkAndEscalateTasks(initial).tasks;
+  });
 
   // Requirement 1: Persist hide completed tasks state across page refreshes
   const [hideCompleted, setHideCompleted] = useState<boolean>(() => {
@@ -187,6 +192,18 @@ export default function App() {
     updateCountdowns(prev =>
       prev.map(c => (c.id === id ? { ...c, isPinned: !c.isPinned, updatedAt: Date.now() } : c))
     );
+  };
+
+  const handleToggleShowOnHome = (id: string) => {
+    updateCountdowns(prev => {
+      const current = prev.find(c => c.id === id);
+      const willBeActive = !current?.showOnHome;
+      return prev.map(c => ({
+        ...c,
+        showOnHome: c.id === id ? willBeActive : false,
+        updatedAt: Date.now(),
+      }));
+    });
   };
 
   // Update tasks helper with auto-escalation check and cloud sync
@@ -389,17 +406,20 @@ export default function App() {
   ) => {
     const now = Date.now();
     updateTasks(prev =>
-      prev.map(t =>
-        t.id === id
-          ? {
-              ...t,
-              recurrence,
-              advanceDays,
-              dueDate: newDueDate !== undefined ? newDueDate : t.dueDate,
-              updatedAt: now,
-            }
-          : t
-      )
+      prev.map(t => {
+        if (t.id !== id) return t;
+        const isRecur = Boolean(recurrence && recurrence !== 'none');
+        const restoredQuadrant = isRecur && t.autoEscalatedFrom ? t.autoEscalatedFrom : t.quadrant;
+        return {
+          ...t,
+          quadrant: restoredQuadrant,
+          autoEscalatedFrom: isRecur ? null : t.autoEscalatedFrom,
+          recurrence,
+          advanceDays,
+          dueDate: newDueDate !== undefined ? newDueDate : t.dueDate,
+          updatedAt: now,
+        };
+      })
     );
   };
 
@@ -416,13 +436,25 @@ export default function App() {
     });
   };
 
-  // Nearest upcoming countdown for header button badge
-  const nearestCountdown = useMemo(() => {
+  // Selected or nearest countdown for header and main screen display
+  const homeCountdown = useMemo(() => {
+    if (countdowns.length === 0) return null;
+    // 1. Explicitly selected for home screen
+    const explicit = countdowns.find(c => c.showOnHome);
+    if (explicit) {
+      return { item: explicit, stats: calculateCountdownStats(explicit) };
+    }
+    // 2. Pinned
+    const pinned = countdowns.find(c => c.isPinned);
+    if (pinned) {
+      return { item: pinned, stats: calculateCountdownStats(pinned) };
+    }
+    // 3. Nearest upcoming
     const upcoming = countdowns
       .map(item => ({ item, stats: calculateCountdownStats(item) }))
       .filter(x => x.stats.status !== 'passed')
       .sort((a, b) => a.stats.daysDiff - b.stats.daysDiff);
-    return upcoming[0] || null;
+    return upcoming[0] || { item: countdowns[0], stats: calculateCountdownStats(countdowns[0]) };
   }, [countdowns]);
 
   return (
@@ -451,13 +483,20 @@ export default function App() {
             <button
               onClick={() => setIsCountdownModalOpen(true)}
               className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-amber-200 dark:border-amber-800/80 bg-amber-50/80 dark:bg-amber-950/40 text-xs font-semibold text-amber-700 dark:text-amber-300 hover:bg-amber-100/90 dark:hover:bg-amber-900/50 shadow-2xs transition-colors cursor-pointer"
-              title="打开单独的倒数日与目标进度看板"
+              title={`打开单独的倒数日看板${homeCountdown ? `（当前主屏展示：${homeCountdown.item.title}）` : ''}`}
             >
               <Timer className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
               <span>倒数日</span>
-              {nearestCountdown && (
-                <span className="hidden sm:inline-flex items-center px-1.5 py-0.5 text-[10px] bg-amber-200/90 dark:bg-amber-800 text-amber-900 dark:text-amber-100 rounded-full font-bold">
-                  {nearestCountdown.stats.daysDiff === 0 ? '今天' : `${nearestCountdown.stats.daysDiff}天`}
+              {homeCountdown && (
+                <span className="hidden sm:inline-flex items-center space-x-1 px-2 py-0.5 text-[10px] bg-amber-200/90 dark:bg-amber-800 text-amber-900 dark:text-amber-100 rounded-full font-bold">
+                  <span className="truncate max-w-[84px]">{homeCountdown.item.title}:</span>
+                  <span>
+                    {homeCountdown.stats.daysDiff === 0
+                      ? '今天'
+                      : homeCountdown.stats.status === 'passed'
+                      ? `+${Math.abs(homeCountdown.stats.daysDiff)}天`
+                      : `${homeCountdown.stats.daysDiff}天`}
+                  </span>
                 </span>
               )}
             </button>
@@ -566,7 +605,116 @@ export default function App() {
       )}
 
       {/* Main 2x2 Matrix Grid matching the screenshot */}
-      <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1">
+      <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-5 flex-1 space-y-5">
+        {/* Main Screen Countdown Feature Banner (Selected Countdown) */}
+        {homeCountdown && (
+          <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-amber-500/10 via-indigo-500/10 to-purple-500/10 dark:from-amber-950/30 dark:via-indigo-950/30 dark:to-purple-950/30 border border-amber-200/80 dark:border-amber-900/40 p-4 sm:p-5 shadow-2xs transition-all">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              {/* Left Info & Progress */}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center space-x-2 mb-1.5 flex-wrap gap-y-1">
+                  <span className="inline-flex items-center space-x-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-500 text-white shadow-2xs">
+                    <Monitor className="w-3 h-3" />
+                    <span>主屏幕倒数</span>
+                  </span>
+                  <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700">
+                    {getCategoryMeta(homeCountdown.item.category).label}
+                  </span>
+                  <span className="text-xs text-slate-500 dark:text-slate-400 flex items-center space-x-1">
+                    <Calendar className="w-3 h-3" />
+                    <span>目标日：{homeCountdown.item.targetDate}</span>
+                  </span>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <h2 className="text-base sm:text-lg font-black text-slate-900 dark:text-white truncate">
+                    {homeCountdown.item.title}
+                  </h2>
+                  {homeCountdown.item.notes && (
+                    <span className="hidden md:inline text-xs text-slate-500 dark:text-slate-400 truncate max-w-sm">
+                      · “{homeCountdown.item.notes}”
+                    </span>
+                  )}
+                </div>
+
+                {/* Progress bars with 2-decimal-places precision */}
+                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-2xl">
+                  {/* Time Progress */}
+                  <div className="bg-white/85 dark:bg-slate-800/85 p-2.5 rounded-xl border border-slate-200/60 dark:border-slate-700/60 shadow-2xs">
+                    <div className="flex justify-between items-center text-[11px] mb-1">
+                      <span className="text-slate-500 dark:text-slate-400 flex items-center space-x-1">
+                        <Clock className="w-3 h-3 text-amber-500" />
+                        <span>时光流逝进度</span>
+                      </span>
+                      <span className="font-bold text-amber-600 dark:text-amber-400">
+                        {formatPercent(homeCountdown.stats.timeProgressPercent)}% ({homeCountdown.stats.passedDays}/{homeCountdown.stats.totalDays}天)
+                      </span>
+                    </div>
+                    <div className="w-full h-1.5 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-amber-400 to-amber-500 rounded-full transition-all duration-500"
+                        style={{ width: `${Math.min(100, Math.max(0, homeCountdown.stats.timeProgressPercent))}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Milestones Progress */}
+                  {homeCountdown.stats.milestonesTotal > 0 ? (
+                    <div className="bg-white/85 dark:bg-slate-800/85 p-2.5 rounded-xl border border-slate-200/60 dark:border-slate-700/60 shadow-2xs">
+                      <div className="flex justify-between items-center text-[11px] mb-1">
+                        <span className="text-slate-500 dark:text-slate-400 flex items-center space-x-1">
+                          <Sparkles className="w-3 h-3 text-emerald-500" />
+                          <span>阶段小目标达成率</span>
+                        </span>
+                        <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                          {formatPercent(homeCountdown.stats.milestoneProgressPercent)}% ({homeCountdown.stats.milestonesCompleted}/{homeCountdown.stats.milestonesTotal})
+                        </span>
+                      </div>
+                      <div className="w-full h-1.5 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-gradient-to-r from-emerald-400 to-teal-500 rounded-full transition-all duration-500"
+                          style={{ width: `${Math.min(100, Math.max(0, homeCountdown.stats.milestoneProgressPercent))}%` }}
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-white/85 dark:bg-slate-800/85 p-2.5 rounded-xl border border-slate-200/60 dark:border-slate-700/60 shadow-2xs flex items-center justify-between">
+                      <span className="text-[11px] text-slate-500">还剩时间</span>
+                      <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400">
+                        {homeCountdown.stats.status === 'today' ? '就在今天！🎉' : homeCountdown.stats.daysLabel}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Right: Days counter pill and Switcher button */}
+              <div className="flex sm:flex-row lg:flex-col items-center justify-between lg:justify-center gap-3 shrink-0">
+                <div className="flex items-baseline space-x-1 bg-white/95 dark:bg-slate-800/95 px-4 py-2 rounded-2xl border border-amber-200/80 dark:border-amber-800/60 shadow-2xs">
+                  <span className="text-xs text-slate-500 font-medium">
+                    {homeCountdown.stats.status === 'upcoming' ? '还剩' : homeCountdown.stats.status === 'today' ? '当天' : '已过'}
+                  </span>
+                  <span className="text-2xl sm:text-3xl font-black text-amber-600 dark:text-amber-400 ml-1">
+                    {Math.abs(homeCountdown.stats.daysDiff)}
+                  </span>
+                  <span className="text-xs font-semibold text-slate-500">天</span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsCountdownModalOpen(true)}
+                  className="flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-slate-900 dark:bg-slate-700 hover:bg-indigo-600 text-white text-xs font-semibold transition-all shadow-2xs cursor-pointer"
+                  title="在倒数日看板中选择哪个显示在主屏幕，或新建/管理更多倒数目标"
+                >
+                  <Monitor className="w-3.5 h-3.5" />
+                  <span>切换主屏倒数</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {/* Quadrant 1: 重要且紧急 */}
           <MinimalQuadrant
@@ -685,6 +833,7 @@ export default function App() {
           onToggleMilestone={handleToggleMilestone}
           onAddMilestone={handleAddMilestone}
           onTogglePin={handleTogglePin}
+          onToggleShowOnHome={handleToggleShowOnHome}
         />
       )}
 

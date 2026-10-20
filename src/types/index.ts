@@ -49,6 +49,7 @@ export interface CountdownItem {
   startDate?: string | null;     // YYYY-MM-DD
   category: CountdownCategory;   // 分类
   isPinned?: boolean;            // 置顶显示
+  showOnHome?: boolean;          // 是否显示在主屏幕上
   notes?: string;                // 备注寄语
   milestones?: CountdownMilestone[]; // 阶段目标清单，用于计算打卡完成进度
   createdAt: number;

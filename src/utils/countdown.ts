@@ -84,6 +84,11 @@ export function getCategoryMeta(category: CountdownCategory) {
   );
 }
 
+export function formatPercent(num: number): string {
+  if (isNaN(num) || num === undefined || num === null) return '0.00';
+  return Number(num).toFixed(2);
+}
+
 // Calculate days difference and progress statistics
 export function calculateCountdownStats(item: CountdownItem): CountdownCalculatedStats {
   try {
@@ -166,16 +171,17 @@ export function calculateCountdownStats(item: CountdownItem): CountdownCalculate
     if (status === 'passed') {
       timeProgressPercent = 100;
     } else if (totalDays > 0) {
-      timeProgressPercent = Math.min(100, Math.max(0, Math.round((passedDays / totalDays) * 100)));
+      const raw = (passedDays / totalDays) * 100;
+      timeProgressPercent = Math.min(100, Math.max(0, Math.round(raw * 100) / 100));
     }
 
-    // Milestones progress
+    // Milestones progress with 2 decimal places precision
     const milestonesTotal = Array.isArray(item.milestones) ? item.milestones.length : 0;
     const milestonesCompleted = Array.isArray(item.milestones)
       ? item.milestones.filter(m => m && m.completed).length
       : 0;
-    const milestoneProgressPercent =
-      milestonesTotal > 0 ? Math.round((milestonesCompleted / milestonesTotal) * 100) : 0;
+    const rawMilestone = milestonesTotal > 0 ? (milestonesCompleted / milestonesTotal) * 100 : 0;
+    const milestoneProgressPercent = Math.round(rawMilestone * 100) / 100;
 
     // Effective progress: if milestones exist, prioritize milestones; otherwise time progress
     const effectiveProgressPercent =
@@ -219,6 +225,7 @@ export const INITIAL_DEMO_COUNTDOWNS: CountdownItem[] = [
     startDate: '2026-01-01',
     category: 'life',
     isPinned: true,
+    showOnHome: true,
     notes: '奔赴新的一年，愿所有的美好与热烈如期而至！',
     createdAt: Date.now() - 30 * 86400000,
     updatedAt: Date.now(),

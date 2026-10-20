@@ -386,7 +386,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                       >
                         <Calendar className="w-2.5 h-2.5" />
                         <span>{dueStatus.text}</span>
-                        {task.autoEscalatedFrom && (
+                        {task.autoEscalatedFrom && !isRecurring && (
                           <span className="text-[9px] font-bold text-rose-600 dark:text-rose-400 ml-0.5">
                             (临期转入)
                           </span>

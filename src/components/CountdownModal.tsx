@@ -18,12 +18,14 @@ import {
   TrendingUp,
   Tag,
   AlertCircle,
+  Monitor,
 } from 'lucide-react';
 import { CountdownItem, CountdownCategory, CountdownMilestone } from '../types';
 import {
   COUNTDOWN_CATEGORIES,
   getCategoryMeta,
   calculateCountdownStats,
+  formatPercent,
 } from '../utils/countdown';
 
 interface CountdownModalProps {
@@ -35,6 +37,7 @@ interface CountdownModalProps {
   onToggleMilestone: (countdownId: string, milestoneId: string) => void;
   onAddMilestone: (countdownId: string, milestoneTitle: string) => void;
   onTogglePin: (id: string) => void;
+  onToggleShowOnHome: (id: string) => void;
 }
 
 export const CountdownModal: React.FC<CountdownModalProps> = ({
@@ -46,6 +49,7 @@ export const CountdownModal: React.FC<CountdownModalProps> = ({
   onToggleMilestone,
   onAddMilestone,
   onTogglePin,
+  onToggleShowOnHome,
 }) => {
   // Filter states
   const [activeTab, setActiveTab] = useState<'all' | 'upcoming' | 'passed'>('all');
@@ -61,6 +65,7 @@ export const CountdownModal: React.FC<CountdownModalProps> = ({
   const [formStartDate, setFormStartDate] = useState('');
   const [formCategory, setFormCategory] = useState<CountdownCategory>('life');
   const [formIsPinned, setFormIsPinned] = useState(false);
+  const [formShowOnHome, setFormShowOnHome] = useState(false);
   const [formNotes, setFormNotes] = useState('');
   const [formMilestones, setFormMilestones] = useState<CountdownMilestone[]>([]);
   const [newMilestoneInput, setNewMilestoneInput] = useState('');
@@ -80,6 +85,7 @@ export const CountdownModal: React.FC<CountdownModalProps> = ({
     setFormStartDate(todayStr);
     setFormCategory('life');
     setFormIsPinned(false);
+    setFormShowOnHome(countdowns.length === 0);
     setFormNotes('');
     setFormMilestones([]);
     setNewMilestoneInput('');
@@ -95,6 +101,7 @@ export const CountdownModal: React.FC<CountdownModalProps> = ({
     setFormStartDate(item.startDate || new Date(item.createdAt).toISOString().split('T')[0]);
     setFormCategory(item.category);
     setFormIsPinned(Boolean(item.isPinned));
+    setFormShowOnHome(Boolean(item.showOnHome));
     setFormNotes(item.notes || '');
     setFormMilestones(item.milestones ? [...item.milestones] : []);
     setNewMilestoneInput('');
@@ -122,6 +129,7 @@ export const CountdownModal: React.FC<CountdownModalProps> = ({
       startDate: formStartDate || null,
       category: formCategory,
       isPinned: formIsPinned,
+      showOnHome: formShowOnHome,
       notes: formNotes.trim(),
       milestones: formMilestones,
       createdAt: editingItem ? editingItem.createdAt : now,
@@ -168,7 +176,11 @@ export const CountdownModal: React.FC<CountdownModalProps> = ({
       if (selectedCategory !== 'all' && item.category !== selectedCategory) return false;
       return true;
     }).sort((a, b) => {
-      // Pinned items first
+      // Home screen item first
+      if (a.showOnHome && !b.showOnHome) return -1;
+      if (!a.showOnHome && b.showOnHome) return 1;
+
+      // Pinned items next
       if (a.isPinned && !b.isPinned) return -1;
       if (!a.isPinned && b.isPinned) return 1;
 
@@ -187,8 +199,10 @@ export const CountdownModal: React.FC<CountdownModalProps> = ({
     });
   }, [countdowns, activeTab, selectedCategory]);
 
-  // Pinned or top hero item
+  // Home screen item, Pinned, or top hero item
   const heroItem = useMemo(() => {
+    const home = countdowns.find(c => c.showOnHome);
+    if (home) return home;
     const pinned = countdowns.find(c => c.isPinned);
     if (pinned) return pinned;
     // Otherwise return nearest upcoming
@@ -260,7 +274,7 @@ export const CountdownModal: React.FC<CountdownModalProps> = ({
                   <div className="flex items-center space-x-2.5 mb-1.5">
                     <span className="inline-flex items-center space-x-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-white/10 backdrop-blur-md text-amber-300 border border-white/10">
                       <Sparkles className="w-3 h-3 text-amber-400" />
-                      <span>{heroItem.isPinned ? '📌 置顶关注' : '⏳ 最近倒数'}</span>
+                      <span>{heroItem.showOnHome ? '🖥️ 主屏展示中' : heroItem.isPinned ? '📌 置顶关注' : '⏳ 最近倒数'}</span>
                     </span>
                     <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-indigo-500/30 text-indigo-200 border border-indigo-400/20">
                       {heroCategoryMeta.label}
@@ -291,13 +305,13 @@ export const CountdownModal: React.FC<CountdownModalProps> = ({
                           <span>时光流逝进度</span>
                         </span>
                         <span className="font-bold text-amber-300">
-                          {heroStats.timeProgressPercent}% · 已过 {heroStats.passedDays} 天 / 共 {heroStats.totalDays} 天
+                          {formatPercent(heroStats.timeProgressPercent)}% · 已过 {heroStats.passedDays} 天 / 共 {heroStats.totalDays} 天
                         </span>
                       </div>
                       <div className="w-full h-2.5 bg-black/40 rounded-full overflow-hidden p-0.5 border border-white/10">
                         <div
                           className="h-full bg-gradient-to-r from-amber-400 via-amber-500 to-indigo-400 rounded-full transition-all duration-500 shadow-sm"
-                          style={{ width: `${heroStats.timeProgressPercent}%` }}
+                          style={{ width: `${Math.min(100, Math.max(0, heroStats.timeProgressPercent))}%` }}
                         />
                       </div>
                     </div>
@@ -311,13 +325,13 @@ export const CountdownModal: React.FC<CountdownModalProps> = ({
                             <span>阶段目标达成率</span>
                           </span>
                           <span className="font-bold text-emerald-300">
-                            {heroStats.milestonesCompleted}/{heroStats.milestonesTotal} 达成 ({heroStats.milestoneProgressPercent}%)
+                            {heroStats.milestonesCompleted}/{heroStats.milestonesTotal} 达成 ({formatPercent(heroStats.milestoneProgressPercent)}%)
                           </span>
                         </div>
                         <div className="w-full h-2.5 bg-black/40 rounded-full overflow-hidden p-0.5 border border-white/10">
                           <div
                             className="h-full bg-gradient-to-r from-emerald-400 to-teal-400 rounded-full transition-all duration-500 shadow-sm"
-                            style={{ width: `${heroStats.milestoneProgressPercent}%` }}
+                            style={{ width: `${Math.min(100, Math.max(0, heroStats.milestoneProgressPercent))}%` }}
                           />
                         </div>
                       </div>
@@ -450,13 +464,20 @@ export const CountdownModal: React.FC<CountdownModalProps> = ({
                     <div>
                       {/* Card Top Row: Category, Pin, Actions */}
                       <div className="flex items-center justify-between gap-2 mb-2">
-                        <div className="flex items-center space-x-1.5">
+                        <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
                           <span
                             className={`text-[10px] font-semibold px-2 py-0.5 rounded-md ${catMeta.badgeBg} ${catMeta.badgeText} flex items-center space-x-1`}
                           >
                             <span className={`w-1.5 h-1.5 rounded-full ${catMeta.dotColor}`} />
                             <span>{catMeta.label}</span>
                           </span>
+
+                          {item.showOnHome && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-300 border border-emerald-300/60 dark:border-emerald-800/60 flex items-center space-x-0.5">
+                              <Monitor className="w-2.5 h-2.5" />
+                              <span>主屏展示</span>
+                            </span>
+                          )}
 
                           {item.isPinned && (
                             <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200/60 flex items-center space-x-0.5">
@@ -468,6 +489,20 @@ export const CountdownModal: React.FC<CountdownModalProps> = ({
 
                         {/* Top-right card actions */}
                         <div className="flex items-center space-x-1 text-slate-400">
+                          {/* Main Screen toggle */}
+                          <button
+                            onClick={() => onToggleShowOnHome(item.id)}
+                            className={`flex items-center space-x-1 px-2 py-1 rounded-lg text-[11px] font-medium transition-colors cursor-pointer ${
+                              item.showOnHome
+                                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-200 border border-emerald-300 dark:border-emerald-700 font-bold'
+                                : 'hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 hover:text-emerald-600 dark:hover:text-emerald-400'
+                            }`}
+                            title={item.showOnHome ? '已显示在主屏幕（点击取消）' : '点击设为在主屏幕上显示'}
+                          >
+                            <Monitor className="w-3 h-3" />
+                            <span>{item.showOnHome ? '主屏展示中' : '设为主屏'}</span>
+                          </button>
+
                           <button
                             onClick={() => onTogglePin(item.id)}
                             className={`p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer ${
@@ -550,7 +585,7 @@ export const CountdownModal: React.FC<CountdownModalProps> = ({
                             <span>时光进度</span>
                           </span>
                           <span className="font-semibold text-slate-700 dark:text-slate-300">
-                            已过 {stats.timeProgressPercent}% · {stats.passedDays}/{stats.totalDays} 天
+                            已过 {formatPercent(stats.timeProgressPercent)}% · {stats.passedDays}/{stats.totalDays} 天
                           </span>
                         </div>
                         <div className="w-full h-2 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
@@ -560,7 +595,7 @@ export const CountdownModal: React.FC<CountdownModalProps> = ({
                                 ? 'bg-slate-400'
                                 : 'bg-gradient-to-r from-indigo-500 to-amber-500'
                             }`}
-                            style={{ width: `${stats.timeProgressPercent}%` }}
+                            style={{ width: `${Math.min(100, Math.max(0, stats.timeProgressPercent))}%` }}
                           />
                         </div>
                       </div>
@@ -574,7 +609,7 @@ export const CountdownModal: React.FC<CountdownModalProps> = ({
                               <span>阶段小目标 ({stats.milestonesCompleted}/{stats.milestonesTotal})</span>
                             </span>
                             <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-700 dark:bg-indigo-950/70 dark:text-indigo-300">
-                              达成 {stats.milestoneProgressPercent}%
+                              达成 {formatPercent(stats.milestoneProgressPercent)}%
                             </span>
                           </div>
 
@@ -785,6 +820,27 @@ export const CountdownModal: React.FC<CountdownModalProps> = ({
                   checked={formIsPinned}
                   onChange={e => setFormIsPinned(e.target.checked)}
                   className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                />
+              </div>
+
+              {/* Show on Home Screen toggle */}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/70">
+                <div className="flex items-center space-x-2">
+                  <Monitor className="w-4 h-4 text-emerald-500" />
+                  <div>
+                    <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 block">
+                      显示在主屏幕
+                    </span>
+                    <span className="text-[11px] text-slate-400">
+                      在主屏幕显要位置和顶部导航栏展示此倒数日与精准进度
+                    </span>
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={formShowOnHome}
+                  onChange={e => setFormShowOnHome(e.target.checked)}
+                  className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
                 />
               </div>
 

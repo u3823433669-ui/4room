@@ -15,7 +15,26 @@ export function checkAndEscalateTasks(tasks: Task[]): { tasks: Task[]; changedCo
   let changedCount = 0;
 
   const updatedTasks = tasks.map(task => {
-    // Only active tasks with a due date can auto-escalate
+    // Recurring tasks (e.g., daily, weekly, monthly, yearly) do NOT auto-escalate across quadrants!
+    const isRecurring = Boolean(task.recurrence && task.recurrence !== 'none');
+
+    // If an existing recurring task was previously auto-escalated (e.g. from q4->q3 or q2->q1),
+    // restore it immediately back to its original quadrant and clear autoEscalatedFrom!
+    if (isRecurring && task.autoEscalatedFrom) {
+      changedCount++;
+      return {
+        ...task,
+        quadrant: task.autoEscalatedFrom,
+        autoEscalatedFrom: null,
+        updatedAt: Date.now(),
+      };
+    }
+
+    if (isRecurring) {
+      return task;
+    }
+
+    // Only active non-recurring tasks with a due date can auto-escalate
     if (task.completed || !task.dueDate) {
       return task;
     }
