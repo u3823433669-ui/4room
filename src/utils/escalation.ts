@@ -30,6 +30,24 @@ export function checkAndEscalateTasks(tasks: Task[]): { tasks: Task[]; changedCo
       };
     }
 
+    // Daily recurring tasks: If past due and not completed, roll forward to today
+    // so today is always a fresh start without overdue backlog (especially for q4)
+    if (task.recurrence === 'daily' && task.dueDate && !task.completed) {
+      try {
+        const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+        if (task.dueDate < todayStr) {
+          changedCount++;
+          return {
+            ...task,
+            dueDate: todayStr,
+            updatedAt: Date.now(),
+          };
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     if (isRecurring) {
       return task;
     }

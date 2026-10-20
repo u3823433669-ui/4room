@@ -11,6 +11,7 @@ export interface Task {
   dueDate?: string | null;     // YYYY-MM-DD
   autoEscalatedFrom?: QuadrantId | null; // e.g. escalated from q2 -> q1 or q4 -> q3
   recurrence?: RecurrenceType | null;   // 'daily' | 'weekly' | 'monthly' | 'yearly'
+  weekdays?: number[] | null;          // 0 = 周日, 1 = 周一, ..., 6 = 周六 (用于每周重复指定的星期几)
   advanceDays?: number | null;         // 提前多少天显示 (例如每年生日提前 15 天显示，默认每天为0天即当天显示)
   recurringParentId?: string | null;   // 如果是归档的完成记录，关联母任务ID
   createdAt: number;

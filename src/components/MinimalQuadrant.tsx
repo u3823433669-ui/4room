@@ -23,6 +23,8 @@ import {
   getDaysUntilVisible,
   getRecurrenceLabel,
   getDefaultAdvanceDays,
+  WEEKDAY_OPTIONS,
+  getNextOccurrenceForWeekdays,
 } from '../utils/recurrence';
 
 interface MinimalQuadrantProps {
@@ -44,7 +46,8 @@ interface MinimalQuadrantProps {
     quadrant: QuadrantId,
     dueDate?: string | null,
     recurrence?: RecurrenceType | null,
-    advanceDays?: number | null
+    advanceDays?: number | null,
+    weekdays?: number[] | null
   ) => void;
   onToggleTask: (id: string) => void;
   onDeleteTask: (id: string) => void;
@@ -54,7 +57,8 @@ interface MinimalQuadrantProps {
     id: string,
     recurrence: RecurrenceType | null,
     advanceDays: number | null,
-    newDueDate?: string | null
+    newDueDate?: string | null,
+    weekdays?: number[] | null
   ) => void;
   onDropTask: (taskId: string, targetQuadrant: QuadrantId) => void;
 }
@@ -102,6 +106,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
   const [inputValue, setInputValue] = useState('');
   const [selectedDueDate, setSelectedDueDate] = useState<string>('');
   const [selectedRecurrence, setSelectedRecurrence] = useState<RecurrenceType>('none');
+  const [selectedWeekdays, setSelectedWeekdays] = useState<number[]>([new Date().getDay()]);
   const [selectedAdvanceDays, setSelectedAdvanceDays] = useState<number | null>(null);
   const [showOptionsPanel, setShowOptionsPanel] = useState<boolean>(false);
 
@@ -114,6 +119,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
 
   // Recurrence edit temp state for an existing task
   const [tempRecurrence, setTempRecurrence] = useState<RecurrenceType>('none');
+  const [tempWeekdays, setTempWeekdays] = useState<number[]>([new Date().getDay()]);
   const [tempAdvanceDays, setTempAdvanceDays] = useState<number | null>(null);
   const [tempDueDate, setTempDueDate] = useState<string>('');
 
@@ -129,7 +135,11 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
     if (type !== 'none') {
       const defaultAdvance = getDefaultAdvanceDays(type);
       setSelectedAdvanceDays(defaultAdvance);
-      if (!selectedDueDate) {
+      if (type === 'weekly') {
+        const initialWeekdays = selectedWeekdays.length > 0 ? selectedWeekdays : [new Date().getDay()];
+        setSelectedWeekdays(initialWeekdays);
+        setSelectedDueDate(getNextOccurrenceForWeekdays(initialWeekdays));
+      } else if (!selectedDueDate) {
         // For daily, default to today; for others, set a default date
         const todayStr = new Date().toISOString().split('T')[0];
         setSelectedDueDate(todayStr);
@@ -139,6 +149,18 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
     }
   };
 
+  const toggleSelectedWeekday = (day: number) => {
+    let next: number[];
+    if (selectedWeekdays.includes(day)) {
+      if (selectedWeekdays.length === 1) return;
+      next = selectedWeekdays.filter(d => d !== day);
+    } else {
+      next = [...selectedWeekdays, day];
+    }
+    setSelectedWeekdays(next);
+    setSelectedDueDate(getNextOccurrenceForWeekdays(next));
+  };
+
   const handleSubmit = () => {
     if (!inputValue.trim()) return;
     onAddTask(
@@ -146,12 +168,14 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
       id,
       selectedDueDate || null,
       selectedRecurrence === 'none' ? null : selectedRecurrence,
-      selectedAdvanceDays
+      selectedAdvanceDays,
+      selectedRecurrence === 'weekly' ? selectedWeekdays : null
     );
     setInputValue('');
     setSelectedDueDate('');
     setSelectedRecurrence('none');
     setSelectedAdvanceDays(null);
+    setSelectedWeekdays([new Date().getDay()]);
     setShowOptionsPanel(false);
     setCurrentPage(1);
     sound.playPop();
@@ -223,9 +247,36 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
 
   const openRecurrenceEditor = (task: Task) => {
     setEditingRecurrenceTaskId(task.id);
-    setTempRecurrence(task.recurrence || 'none');
+    const rec = task.recurrence || 'none';
+    setTempRecurrence(rec);
     setTempAdvanceDays(task.advanceDays ?? getDefaultAdvanceDays(task.recurrence));
     setTempDueDate(task.dueDate || new Date().toISOString().split('T')[0]);
+
+    if (task.weekdays && task.weekdays.length > 0) {
+      setTempWeekdays(task.weekdays);
+    } else if (task.dueDate) {
+      try {
+        const [y, m, d] = task.dueDate.split('-').map(Number);
+        const day = new Date(y, m - 1, d).getDay();
+        setTempWeekdays([day]);
+      } catch {
+        setTempWeekdays([new Date().getDay()]);
+      }
+    } else {
+      setTempWeekdays([new Date().getDay()]);
+    }
+  };
+
+  const toggleTempWeekday = (day: number) => {
+    let next: number[];
+    if (tempWeekdays.includes(day)) {
+      if (tempWeekdays.length === 1) return;
+      next = tempWeekdays.filter(d => d !== day);
+    } else {
+      next = [...tempWeekdays, day];
+    }
+    setTempWeekdays(next);
+    setTempDueDate(getNextOccurrenceForWeekdays(next));
   };
 
   const saveRecurrenceEditor = (taskId: string) => {
@@ -234,7 +285,8 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
         taskId,
         tempRecurrence === 'none' ? null : tempRecurrence,
         tempAdvanceDays,
-        tempDueDate || null
+        tempDueDate || null,
+        tempRecurrence === 'weekly' ? tempWeekdays : null
       );
     }
     setEditingRecurrenceTaskId(null);
@@ -380,7 +432,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                       >
                         <Repeat className="w-2.5 h-2.5" />
                         <span>
-                          {getRecurrenceLabel(task.recurrence)}
+                          {getRecurrenceLabel(task.recurrence, task.weekdays)}
                           {task.advanceDays !== null && task.advanceDays !== undefined
                             ? task.advanceDays === 0
                               ? '·当天'
@@ -391,31 +443,46 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                     )}
 
                     {/* Due Date & Auto-escalation Badge */}
-                    {task.dueDate && (
-                      <span
-                        onClick={() =>
-                          setChangingDateTaskId(
-                            changingDateTaskId === task.id ? null : task.id
-                          )
-                        }
-                        className={`inline-flex items-center space-x-1 text-[10px] px-1.5 py-0.2 rounded font-medium cursor-pointer transition-colors ${
-                          dueStatus.isOverdue
-                            ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/70 dark:text-rose-300 animate-pulse'
-                            : dueStatus.isUrgent
-                            ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300'
-                            : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300 hover:bg-slate-200'
-                        }`}
-                        title="点击修改或清除截止时间"
-                      >
-                        <Calendar className="w-2.5 h-2.5" />
-                        <span>{dueStatus.text}</span>
-                        {task.autoEscalatedFrom && !isRecurring && (
-                          <span className="text-[9px] font-bold text-rose-600 dark:text-rose-400 ml-0.5">
-                            (临期转入)
-                          </span>
-                        )}
-                      </span>
-                    )}
+                    {(() => {
+                      const isQ4 = id === 'q4';
+                      // 1. 不紧急不重要的，不要加今天截止的标签
+                      const isTodayDeadline = dueStatus.text === '今天截止';
+                      // 2. 不紧急不重要的，如果是每天重复的任务，当天没做也不显示“逾期”
+                      const isDailyOverdueInQ4 = isQ4 && task.recurrence === 'daily' && dueStatus.isOverdue;
+                      const shouldShowDueBadge = Boolean(
+                        task.dueDate &&
+                        !(isQ4 && isTodayDeadline) &&
+                        !isDailyOverdueInQ4
+                      );
+
+                      if (!shouldShowDueBadge) return null;
+
+                      return (
+                        <span
+                          onClick={() =>
+                            setChangingDateTaskId(
+                              changingDateTaskId === task.id ? null : task.id
+                            )
+                          }
+                          className={`inline-flex items-center space-x-1 text-[10px] px-1.5 py-0.2 rounded font-medium cursor-pointer transition-colors ${
+                            dueStatus.isOverdue
+                              ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/70 dark:text-rose-300 animate-pulse'
+                              : dueStatus.isUrgent
+                              ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300'
+                              : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300 hover:bg-slate-200'
+                          }`}
+                          title="点击修改或清除截止时间"
+                        >
+                          <Calendar className="w-2.5 h-2.5" />
+                          <span>{dueStatus.text}</span>
+                          {task.autoEscalatedFrom && !isRecurring && (
+                            <span className="text-[9px] font-bold text-rose-600 dark:text-rose-400 ml-0.5">
+                              (临期转入)
+                            </span>
+                          )}
+                        </span>
+                      );
+                    })()}
 
                     {/* Date picker edit overlay */}
                     {changingDateTaskId === task.id && (
@@ -701,6 +768,11 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                     setTempRecurrence(opt.type);
                     if (opt.type !== 'none') {
                       setTempAdvanceDays(getDefaultAdvanceDays(opt.type));
+                      if (opt.type === 'weekly') {
+                        const initialDays = tempWeekdays.length > 0 ? tempWeekdays : [new Date().getDay()];
+                        setTempWeekdays(initialDays);
+                        setTempDueDate(getNextOccurrenceForWeekdays(initialDays));
+                      }
                     } else {
                       setTempAdvanceDays(null);
                     }
@@ -719,17 +791,68 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
 
           {tempRecurrence !== 'none' && (
             <>
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
-                  周期基准日期 / 生日到期日
-                </label>
-                <input
-                  type="date"
-                  value={tempDueDate}
-                  onChange={e => setTempDueDate(e.target.value)}
-                  className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1 text-xs outline-none"
-                />
-              </div>
+              {tempRecurrence === 'weekly' ? (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                      设置每周几重复（可点选星期几）
+                    </label>
+                    <span className="text-[10px] text-purple-600 dark:text-purple-400 font-bold bg-purple-50 dark:bg-purple-950/60 px-1.5 py-0.5 rounded">
+                      {getRecurrenceLabel('weekly', tempWeekdays)}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-7 gap-1">
+                    {WEEKDAY_OPTIONS.map(opt => {
+                      const isSelected = tempWeekdays.includes(opt.day);
+                      return (
+                        <button
+                          key={opt.day}
+                          type="button"
+                          onClick={() => toggleTempWeekday(opt.day)}
+                          className={`py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex flex-col items-center justify-center ${
+                            isSelected
+                              ? 'bg-purple-600 text-white font-bold shadow-xs ring-2 ring-purple-400/40'
+                              : 'bg-slate-100 dark:bg-slate-700/60 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
+                          }`}
+                        >
+                          <span>{opt.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-slate-500 pt-0.5">
+                    <span>下次执行日：<strong className="text-slate-700 dark:text-slate-200">{tempDueDate}</strong></span>
+                    <input
+                      type="date"
+                      value={tempDueDate}
+                      onChange={e => {
+                        setTempDueDate(e.target.value);
+                        try {
+                          const [y, m, d] = e.target.value.split('-').map(Number);
+                          const day = new Date(y, m - 1, d).getDay();
+                          if (!tempWeekdays.includes(day)) {
+                            setTempWeekdays([day]);
+                          }
+                        } catch {}
+                      }}
+                      className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5 text-[11px] outline-none"
+                      title="微调基准日期"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                    {tempRecurrence === 'yearly' ? '每年生日/纪念日日期' : '周期基准日期 / 生日到期日'}
+                  </label>
+                  <input
+                    type="date"
+                    value={tempDueDate}
+                    onChange={e => setTempDueDate(e.target.value)}
+                    className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1 text-xs outline-none"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
@@ -808,12 +931,47 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
               </div>
             </div>
 
+            {/* Weekly Weekday Selector */}
+            {selectedRecurrence === 'weekly' && (
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                    每周执行时间（选择星期几）
+                  </label>
+                  <span className="text-[10px] text-purple-600 dark:text-purple-400 font-bold bg-purple-50 dark:bg-purple-950/60 px-1.5 py-0.5 rounded">
+                    {getRecurrenceLabel('weekly', selectedWeekdays)}
+                  </span>
+                </div>
+                <div className="grid grid-cols-7 gap-1">
+                  {WEEKDAY_OPTIONS.map(opt => {
+                    const isSelected = selectedWeekdays.includes(opt.day);
+                    return (
+                      <button
+                        key={opt.day}
+                        type="button"
+                        onClick={() => toggleSelectedWeekday(opt.day)}
+                        className={`py-1 rounded text-xs font-semibold transition-all cursor-pointer flex flex-col items-center justify-center ${
+                          isSelected
+                            ? 'bg-purple-600 text-white font-bold shadow-2xs ring-1 ring-purple-400'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
+                        }`}
+                      >
+                        <span>{opt.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* If recurring or user wants due date */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 border-t border-slate-100 dark:border-slate-800">
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
                   {selectedRecurrence === 'yearly'
                     ? '每年生日/纪念日日期'
+                    : selectedRecurrence === 'weekly'
+                    ? '首期/下次执行日'
                     : '截止/目标完成日'}
                 </label>
                 <div className="flex items-center space-x-1.5">
@@ -859,6 +1017,14 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
             </div>
 
             {/* Helpful explanation badge based on selection */}
+            {selectedRecurrence === 'weekly' && (
+              <div className="bg-purple-50 dark:bg-purple-950/50 p-2 rounded-lg text-[11px] text-purple-700 dark:text-purple-300 flex items-center space-x-1.5">
+                <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                <span>
+                  每周任务：<strong>{getRecurrenceLabel('weekly', selectedWeekdays)}</strong> 自动循环，下次执行日：{selectedDueDate}。
+                </span>
+              </div>
+            )}
             {selectedRecurrence === 'yearly' && (
               <div className="bg-purple-50 dark:bg-purple-950/50 p-2 rounded-lg text-[11px] text-purple-700 dark:text-purple-300 flex items-center space-x-1.5">
                 <Sparkles className="w-3.5 h-3.5 shrink-0" />

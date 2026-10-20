@@ -248,13 +248,14 @@ export default function App() {
     setCountdowns(guestCountdowns);
   };
 
-  // Add task with optional due date, recurrence and advanceDays
+  // Add task with optional due date, recurrence, advanceDays and weekdays
   const handleAddTask = (
     title: string,
     quadrant: QuadrantId,
     dueDate?: string | null,
     recurrence?: RecurrenceType | null,
-    advanceDays?: number | null
+    advanceDays?: number | null,
+    weekdays?: number[] | null
   ) => {
     const now = Date.now();
     const newTask: Task = {
@@ -265,6 +266,7 @@ export default function App() {
       completedAt: null,
       dueDate: dueDate || null,
       recurrence: recurrence || null,
+      weekdays: recurrence === 'weekly' ? weekdays || null : null,
       advanceDays: advanceDays !== undefined ? advanceDays : null,
       createdAt: now,
       updatedAt: now,
@@ -293,6 +295,7 @@ export default function App() {
           completedAt: now,
           dueDate: task.dueDate || todayStr,
           recurrence: task.recurrence,
+          weekdays: task.weekdays,
           advanceDays: task.advanceDays,
           recurringParentId: task.id,
           createdAt: task.createdAt,
@@ -300,7 +303,7 @@ export default function App() {
         };
 
         // 2. Compute next cycle due date
-        const nextDueDate = computeNextDueDate(task.dueDate || todayStr, task.recurrence);
+        const nextDueDate = computeNextDueDate(task.dueDate || todayStr, task.recurrence, task.weekdays);
         const updatedRecurringTask: Task = {
           ...task,
           completed: false,
@@ -393,12 +396,13 @@ export default function App() {
     );
   };
 
-  // Update task recurrence and advance visibility settings
+  // Update task recurrence, weekdays and advance visibility settings
   const handleUpdateTaskRecurrence = (
     id: string,
     recurrence: RecurrenceType | null,
     advanceDays: number | null,
-    newDueDate?: string | null
+    newDueDate?: string | null,
+    weekdays?: number[] | null
   ) => {
     const now = Date.now();
     updateTasks(prev =>
@@ -411,6 +415,7 @@ export default function App() {
           quadrant: restoredQuadrant,
           autoEscalatedFrom: isRecur ? null : t.autoEscalatedFrom,
           recurrence,
+          weekdays: recurrence === 'weekly' ? weekdays || null : null,
           advanceDays,
           dueDate: newDueDate !== undefined ? newDueDate : t.dueDate,
           updatedAt: now,

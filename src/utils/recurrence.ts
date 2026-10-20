@@ -1,10 +1,65 @@
 import { RecurrenceType, Task } from '../types';
 
+export const WEEKDAY_OPTIONS = [
+  { day: 1, label: '周一', shortLabel: '一' },
+  { day: 2, label: '周二', shortLabel: '二' },
+  { day: 3, label: '周三', shortLabel: '三' },
+  { day: 4, label: '周四', shortLabel: '四' },
+  { day: 5, label: '周五', shortLabel: '五' },
+  { day: 6, label: '周六', shortLabel: '六' },
+  { day: 0, label: '周日', shortLabel: '日' },
+];
+
+export const WEEKDAY_NAMES: Record<number, string> = {
+  1: '周一',
+  2: '周二',
+  3: '周三',
+  4: '周四',
+  5: '周五',
+  6: '周六',
+  0: '周日',
+};
+
 /**
- * Computes the next due date based on recurrence type.
- * e.g., daily -> +1 day, weekly -> +7 days, monthly -> +1 month, yearly -> +1 year.
+ * Calculates the nearest upcoming date (including today) that matches any of the given weekdays.
  */
-export function computeNextDueDate(currentDueDateStr?: string | null, recurrence?: RecurrenceType | null): string {
+export function getNextOccurrenceForWeekdays(weekdays: number[], fromDate: Date = new Date()): string {
+  if (!weekdays || weekdays.length === 0) {
+    const y = fromDate.getFullYear();
+    const m = String(fromDate.getMonth() + 1).padStart(2, '0');
+    const d = String(fromDate.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  const start = new Date(fromDate);
+  start.setHours(0, 0, 0, 0);
+
+  for (let offset = 0; offset < 7; offset++) {
+    const candidate = new Date(start);
+    candidate.setDate(start.getDate() + offset);
+    if (weekdays.includes(candidate.getDay())) {
+      const y = candidate.getFullYear();
+      const m = String(candidate.getMonth() + 1).padStart(2, '0');
+      const d = String(candidate.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+  }
+
+  const y = start.getFullYear();
+  const m = String(start.getMonth() + 1).padStart(2, '0');
+  const d = String(start.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * Computes the next due date based on recurrence type and optional weekdays.
+ * e.g., daily -> +1 day, weekly -> next selected weekday or +7 days, monthly -> +1 month, yearly -> +1 year.
+ */
+export function computeNextDueDate(
+  currentDueDateStr?: string | null,
+  recurrence?: RecurrenceType | null,
+  weekdays?: number[] | null
+): string {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
@@ -33,9 +88,26 @@ export function computeNextDueDate(currentDueDateStr?: string | null, recurrence
       nextDate.setDate(nextDate.getDate() + 1);
       break;
 
-    case 'weekly':
-      nextDate.setDate(nextDate.getDate() + 7);
+    case 'weekly': {
+      if (weekdays && weekdays.length > 0) {
+        let found = false;
+        for (let offset = 1; offset <= 7; offset++) {
+          const candidate = new Date(baseDate);
+          candidate.setDate(baseDate.getDate() + offset);
+          if (weekdays.includes(candidate.getDay())) {
+            nextDate.setTime(candidate.getTime());
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          nextDate.setDate(nextDate.getDate() + 7);
+        }
+      } else {
+        nextDate.setDate(nextDate.getDate() + 7);
+      }
       break;
+    }
 
     case 'monthly': {
       const origDay = nextDate.getDate();
@@ -128,12 +200,33 @@ export function getDaysUntilVisible(task: Task, refDate: Date = new Date()): num
   }
 }
 
-export function getRecurrenceLabel(recurrence?: RecurrenceType | null): string {
+export function getRecurrenceLabel(
+  recurrence?: RecurrenceType | null,
+  weekdays?: number[] | null
+): string {
   switch (recurrence) {
     case 'daily':
       return '每日';
-    case 'weekly':
-      return '每周';
+    case 'weekly': {
+      if (!weekdays || weekdays.length === 0) {
+        return '每周';
+      }
+      if (weekdays.length === 1) {
+        return `每${WEEKDAY_NAMES[weekdays[0]] || '周'}`;
+      }
+      if (weekdays.length === 7) {
+        return '每日';
+      }
+      const sorted = [...weekdays].sort((a, b) => (a === 0 ? 7 : a) - (b === 0 ? 7 : b));
+      if (sorted.length === 5 && [1, 2, 3, 4, 5].every(d => sorted.includes(d))) {
+        return '每周工作日';
+      }
+      if (sorted.length === 2 && [0, 6].every(d => sorted.includes(d))) {
+        return '每周末';
+      }
+      const daysStr = sorted.map(d => WEEKDAY_NAMES[d]?.replace('周', '')).join('、');
+      return `每周${daysStr}`;
+    }
     case 'monthly':
       return '每月';
     case 'yearly':
