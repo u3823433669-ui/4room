@@ -70,8 +70,6 @@ export const CountdownModal: React.FC<CountdownModalProps> = ({
   const [inlineMilestoneInput, setInlineMilestoneInput] = useState<{ [id: string]: string }>({});
   const [showInlineInput, setShowInlineInput] = useState<{ [id: string]: boolean }>({});
 
-  if (!isOpen) return null;
-
   // Open Form for Creating New Item
   const handleOpenCreate = () => {
     const todayStr = new Date().toISOString().split('T')[0];
@@ -202,6 +200,8 @@ export const CountdownModal: React.FC<CountdownModalProps> = ({
 
   const heroStats = heroItem ? calculateCountdownStats(heroItem) : null;
   const heroCategoryMeta = heroItem ? getCategoryMeta(heroItem.category) : null;
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">

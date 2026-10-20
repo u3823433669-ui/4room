@@ -456,7 +456,7 @@ export default function App() {
               <Timer className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
               <span>倒数日</span>
               {nearestCountdown && (
-                <span className="hidden sm:inline-flex items-center px-1.5 py-0.2 text-[10px] bg-amber-200/90 dark:bg-amber-800 text-amber-900 dark:text-amber-100 rounded-full font-bold">
+                <span className="hidden sm:inline-flex items-center px-1.5 py-0.5 text-[10px] bg-amber-200/90 dark:bg-amber-800 text-amber-900 dark:text-amber-100 rounded-full font-bold">
                   {nearestCountdown.stats.daysDiff === 0 ? '今天' : `${nearestCountdown.stats.daysDiff}天`}
                 </span>
               )}
@@ -675,16 +675,18 @@ export default function App() {
       />
 
       {/* Standalone Countdown & Milestone Progress Modal */}
-      <CountdownModal
-        isOpen={isCountdownModalOpen}
-        onClose={() => setIsCountdownModalOpen(false)}
-        countdowns={countdowns}
-        onSaveCountdown={handleSaveCountdown}
-        onDeleteCountdown={handleDeleteCountdown}
-        onToggleMilestone={handleToggleMilestone}
-        onAddMilestone={handleAddMilestone}
-        onTogglePin={handleTogglePin}
-      />
+      {isCountdownModalOpen && (
+        <CountdownModal
+          isOpen={isCountdownModalOpen}
+          onClose={() => setIsCountdownModalOpen(false)}
+          countdowns={countdowns}
+          onSaveCountdown={handleSaveCountdown}
+          onDeleteCountdown={handleDeleteCountdown}
+          onToggleMilestone={handleToggleMilestone}
+          onAddMilestone={handleAddMilestone}
+          onTogglePin={handleTogglePin}
+        />
+      )}
 
       {/* User Login / Register Modal */}
       <AuthModal

@@ -86,78 +86,128 @@ export function getCategoryMeta(category: CountdownCategory) {
 
 // Calculate days difference and progress statistics
 export function calculateCountdownStats(item: CountdownItem): CountdownCalculatedStats {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-  // Parse target date YYYY-MM-DD
-  const targetParts = item.targetDate.split('-');
-  const target = new Date(
-    Number(targetParts[0]),
-    Number(targetParts[1]) - 1,
-    Number(targetParts[2])
-  );
-  target.setHours(0, 0, 0, 0);
+    if (!item || !item.targetDate) {
+      return {
+        daysDiff: 0,
+        status: 'today',
+        daysLabel: '今天',
+        totalDays: 1,
+        passedDays: 0,
+        timeProgressPercent: 0,
+        milestonesTotal: 0,
+        milestonesCompleted: 0,
+        milestoneProgressPercent: 0,
+        effectiveProgressPercent: 0,
+      };
+    }
 
-  const msPerDay = 1000 * 60 * 60 * 24;
-  const daysDiff = Math.round((target.getTime() - today.getTime()) / msPerDay);
+    // Parse target date YYYY-MM-DD safely
+    let target: Date;
+    if (item.targetDate.includes('-')) {
+      const targetParts = item.targetDate.split('-');
+      target = new Date(
+        Number(targetParts[0]),
+        Number(targetParts[1]) - 1,
+        Number(targetParts[2])
+      );
+    } else {
+      target = new Date(item.targetDate);
+    }
 
-  let status: 'upcoming' | 'today' | 'passed' = 'upcoming';
-  let daysLabel = `还有 ${daysDiff} 天`;
+    if (isNaN(target.getTime())) {
+      target = new Date();
+    }
+    target.setHours(0, 0, 0, 0);
 
-  if (daysDiff === 0) {
-    status = 'today';
-    daysLabel = '就在今天！🎉';
-  } else if (daysDiff < 0) {
-    status = 'passed';
-    daysLabel = `已过去 ${Math.abs(daysDiff)} 天`;
+    const msPerDay = 1000 * 60 * 60 * 24;
+    const daysDiff = Math.round((target.getTime() - today.getTime()) / msPerDay);
+
+    let status: 'upcoming' | 'today' | 'passed' = 'upcoming';
+    let daysLabel = `还有 ${daysDiff} 天`;
+
+    if (daysDiff === 0) {
+      status = 'today';
+      daysLabel = '就在今天！🎉';
+    } else if (daysDiff < 0) {
+      status = 'passed';
+      daysLabel = `已过去 ${Math.abs(daysDiff)} 天`;
+    }
+
+    // Calculate start date for time progress
+    let start: Date;
+    if (item.startDate) {
+      if (item.startDate.includes('-')) {
+        const startParts = item.startDate.split('-');
+        start = new Date(
+          Number(startParts[0]),
+          Number(startParts[1]) - 1,
+          Number(startParts[2])
+        );
+      } else {
+        start = new Date(item.startDate);
+      }
+    } else {
+      start = new Date(item.createdAt || Date.now());
+    }
+
+    if (isNaN(start.getTime())) {
+      start = new Date(today.getTime() - 30 * msPerDay);
+    }
+    start.setHours(0, 0, 0, 0);
+
+    const totalDays = Math.max(1, Math.round((target.getTime() - start.getTime()) / msPerDay));
+    const passedDays = Math.max(0, Math.round((today.getTime() - start.getTime()) / msPerDay));
+
+    let timeProgressPercent = 0;
+    if (status === 'passed') {
+      timeProgressPercent = 100;
+    } else if (totalDays > 0) {
+      timeProgressPercent = Math.min(100, Math.max(0, Math.round((passedDays / totalDays) * 100)));
+    }
+
+    // Milestones progress
+    const milestonesTotal = Array.isArray(item.milestones) ? item.milestones.length : 0;
+    const milestonesCompleted = Array.isArray(item.milestones)
+      ? item.milestones.filter(m => m && m.completed).length
+      : 0;
+    const milestoneProgressPercent =
+      milestonesTotal > 0 ? Math.round((milestonesCompleted / milestonesTotal) * 100) : 0;
+
+    // Effective progress: if milestones exist, prioritize milestones; otherwise time progress
+    const effectiveProgressPercent =
+      milestonesTotal > 0 ? milestoneProgressPercent : timeProgressPercent;
+
+    return {
+      daysDiff,
+      status,
+      daysLabel,
+      totalDays,
+      passedDays,
+      timeProgressPercent,
+      milestonesTotal,
+      milestonesCompleted,
+      milestoneProgressPercent,
+      effectiveProgressPercent,
+    };
+  } catch (err) {
+    console.warn('[calculateCountdownStats] Error calculating stats:', err);
+    return {
+      daysDiff: 0,
+      status: 'today',
+      daysLabel: '今天',
+      totalDays: 1,
+      passedDays: 0,
+      timeProgressPercent: 0,
+      milestonesTotal: 0,
+      milestonesCompleted: 0,
+      milestoneProgressPercent: 0,
+      effectiveProgressPercent: 0,
+    };
   }
-
-  // Calculate start date for time progress
-  let start: Date;
-  if (item.startDate) {
-    const startParts = item.startDate.split('-');
-    start = new Date(
-      Number(startParts[0]),
-      Number(startParts[1]) - 1,
-      Number(startParts[2])
-    );
-  } else {
-    start = new Date(item.createdAt);
-  }
-  start.setHours(0, 0, 0, 0);
-
-  const totalDays = Math.max(1, Math.round((target.getTime() - start.getTime()) / msPerDay));
-  const passedDays = Math.max(0, Math.round((today.getTime() - start.getTime()) / msPerDay));
-
-  let timeProgressPercent = 0;
-  if (status === 'passed') {
-    timeProgressPercent = 100;
-  } else if (totalDays > 0) {
-    timeProgressPercent = Math.min(100, Math.max(0, Math.round((passedDays / totalDays) * 100)));
-  }
-
-  // Milestones progress
-  const milestonesTotal = item.milestones?.length || 0;
-  const milestonesCompleted = item.milestones?.filter(m => m.completed).length || 0;
-  const milestoneProgressPercent =
-    milestonesTotal > 0 ? Math.round((milestonesCompleted / milestonesTotal) * 100) : 0;
-
-  // Effective progress: if milestones exist, combine or prioritize milestones; otherwise time progress
-  const effectiveProgressPercent =
-    milestonesTotal > 0 ? milestoneProgressPercent : timeProgressPercent;
-
-  return {
-    daysDiff,
-    status,
-    daysLabel,
-    totalDays,
-    passedDays,
-    timeProgressPercent,
-    milestonesTotal,
-    milestonesCompleted,
-    milestoneProgressPercent,
-    effectiveProgressPercent,
-  };
 }
 
 // Initial sample countdowns
