@@ -11,9 +11,11 @@ import {
   ChevronLeft,
   ChevronRight,
   RotateCcw,
+  Repeat,
 } from 'lucide-react';
 import { Task, DayCompletionStat, QuadrantId } from '../types';
 import { QUADRANT_METAS } from '../utils/constants';
+import { getRecurrenceLabel } from '../utils/recurrence';
 
 interface CompletionStatsModalProps {
   isOpen: boolean;
@@ -311,6 +313,14 @@ export const CompletionStatsModal: React.FC<CompletionStatsModalProps> = ({
                         >
                           {qMeta.title.slice(0, 4)}
                         </span>
+
+                        {/* Recurrence badge */}
+                        {task.recurrence && task.recurrence !== 'none' && (
+                          <span className="inline-flex items-center space-x-1 text-[10px] font-semibold px-2 py-0.5 rounded-md bg-purple-50 text-purple-700 dark:bg-purple-950/70 dark:text-purple-300 border border-purple-200/60 dark:border-purple-800/60">
+                            <Repeat className="w-2.5 h-2.5" />
+                            <span>{getRecurrenceLabel(task.recurrence)}打卡</span>
+                          </span>
+                        )}
 
                         {timeStr && (
                           <span className="text-[10px] text-slate-400 flex items-center space-x-0.5">

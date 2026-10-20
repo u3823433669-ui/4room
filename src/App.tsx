@@ -9,8 +9,9 @@ import {
   User as UserIcon,
   LogOut,
   Zap,
+  Sparkles,
 } from 'lucide-react';
-import { Task, QuadrantId, AuthState, User } from './types';
+import { Task, QuadrantId, AuthState, User, RecurrenceType } from './types';
 import {
   loadLocalTasks,
   saveLocalTasks,
@@ -22,6 +23,7 @@ import {
   deleteCloudTask,
 } from './utils/storage';
 import { checkAndEscalateTasks } from './utils/escalation';
+import { computeNextDueDate } from './utils/recurrence';
 import { MinimalQuadrant } from './components/MinimalQuadrant';
 import { CompletionStatsModal } from './components/CompletionStatsModal';
 import { AuthModal } from './components/AuthModal';
@@ -41,6 +43,7 @@ export default function App() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [showUserDropdown, setShowUserDropdown] = useState<boolean>(false);
   const [escalatedAlert, setEscalatedAlert] = useState<string | null>(null);
+  const [cycleToast, setCycleToast] = useState<string | null>(null);
 
   // Dark mode effect
   useEffect(() => {
@@ -127,8 +130,14 @@ export default function App() {
     setTasks(guestTasks);
   };
 
-  // Add task with optional due date
-  const handleAddTask = (title: string, quadrant: QuadrantId, dueDate?: string | null) => {
+  // Add task with optional due date, recurrence and advanceDays
+  const handleAddTask = (
+    title: string,
+    quadrant: QuadrantId,
+    dueDate?: string | null,
+    recurrence?: RecurrenceType | null,
+    advanceDays?: number | null
+  ) => {
     const now = Date.now();
     const newTask: Task = {
       id: `task_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -137,6 +146,8 @@ export default function App() {
       completed: false,
       completedAt: null,
       dueDate: dueDate || null,
+      recurrence: recurrence || null,
+      advanceDays: advanceDays !== undefined ? advanceDays : null,
       createdAt: now,
       updatedAt: now,
     };
@@ -144,11 +155,61 @@ export default function App() {
     updateTasks(prev => [...prev, newTask]);
   };
 
-  // Toggle complete
+  // Toggle complete with recurring task support
   const handleToggleTask = (id: string) => {
     const now = Date.now();
-    updateTasks(prev =>
-      prev.map(t => {
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    updateTasks(prev => {
+      const task = prev.find(t => t.id === id);
+      if (!task) return prev;
+
+      // If user is completing a recurring task:
+      if (!task.completed && task.recurrence && task.recurrence !== 'none') {
+        // 1. Create an archived completed record for today's stats
+        const completedRecord: Task = {
+          id: `done_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          title: task.title,
+          quadrant: task.quadrant,
+          completed: true,
+          completedAt: now,
+          dueDate: task.dueDate || todayStr,
+          recurrence: task.recurrence,
+          advanceDays: task.advanceDays,
+          recurringParentId: task.id,
+          createdAt: task.createdAt,
+          updatedAt: now,
+        };
+
+        // 2. Compute next cycle due date
+        const nextDueDate = computeNextDueDate(task.dueDate || todayStr, task.recurrence);
+        const updatedRecurringTask: Task = {
+          ...task,
+          completed: false,
+          completedAt: null,
+          dueDate: nextDueDate,
+          updatedAt: now,
+        };
+
+        const advanceDesc =
+          task.advanceDays === 0
+            ? '当天刷新呈现'
+            : task.advanceDays !== null && task.advanceDays !== undefined
+            ? `提前 ${task.advanceDays} 天自动呈现`
+            : '已刷新就绪';
+
+        setCycleToast(
+          `🎉 "${task.title}" 今日打卡完成并计入统计！下期（${nextDueDate}）${advanceDesc}`
+        );
+        setTimeout(() => setCycleToast(null), 5000);
+
+        return prev
+          .map(t => (t.id === id ? updatedRecurringTask : t))
+          .concat(completedRecord);
+      }
+
+      // Standard single task toggle
+      return prev.map(t => {
         if (t.id === id) {
           const next = !t.completed;
           return {
@@ -159,15 +220,37 @@ export default function App() {
           };
         }
         return t;
-      })
-    );
+      });
+    });
   };
 
-  // Reopen task from stats modal
+  // Reopen task from stats modal (supports recurring task restore)
   const handleReopenTask = (id: string) => {
-    updateTasks(prev =>
-      prev.map(t => (t.id === id ? { ...t, completed: false, completedAt: null, updatedAt: Date.now() } : t))
-    );
+    updateTasks(prev => {
+      const task = prev.find(t => t.id === id);
+      if (!task) return prev;
+
+      // If reopening a completed recurring log, delete log and restore parent due date
+      if (task.recurringParentId) {
+        deleteCloudTask(id, authState.token);
+        return prev
+          .filter(t => t.id !== id)
+          .map(t => {
+            if (t.id === task.recurringParentId) {
+              return {
+                ...t,
+                dueDate: task.dueDate || t.dueDate,
+                updatedAt: Date.now(),
+              };
+            }
+            return t;
+          });
+      }
+
+      return prev.map(t =>
+        t.id === id ? { ...t, completed: false, completedAt: null, updatedAt: Date.now() } : t
+      );
+    });
   };
 
   // Delete task
@@ -189,6 +272,29 @@ export default function App() {
     const now = Date.now();
     updateTasks(prev =>
       prev.map(t => (t.id === id ? { ...t, dueDate: newDueDate, updatedAt: now } : t))
+    );
+  };
+
+  // Update task recurrence and advance visibility settings
+  const handleUpdateTaskRecurrence = (
+    id: string,
+    recurrence: RecurrenceType | null,
+    advanceDays: number | null,
+    newDueDate?: string | null
+  ) => {
+    const now = Date.now();
+    updateTasks(prev =>
+      prev.map(t =>
+        t.id === id
+          ? {
+              ...t,
+              recurrence,
+              advanceDays,
+              dueDate: newDueDate !== undefined ? newDueDate : t.dueDate,
+              updatedAt: now,
+            }
+          : t
+      )
     );
   };
 
@@ -322,6 +428,14 @@ export default function App() {
         </div>
       )}
 
+      {/* Recurring Task cycle completion notification toast */}
+      {cycleToast && (
+        <div className="fixed top-20 right-6 z-40 bg-emerald-600 text-white text-xs px-4 py-2.5 rounded-2xl shadow-xl flex items-center space-x-2 animate-in fade-in slide-in-from-top-2 duration-300 max-w-md">
+          <Sparkles className="w-4 h-4 flex-shrink-0 text-amber-300" />
+          <span className="font-medium">{cycleToast}</span>
+        </div>
+      )}
+
       {/* Main 2x2 Matrix Grid matching the screenshot */}
       <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -345,6 +459,7 @@ export default function App() {
             onDeleteTask={handleDeleteTask}
             onUpdateTaskTitle={handleUpdateTaskTitle}
             onUpdateTaskDueDate={handleUpdateTaskDueDate}
+            onUpdateTaskRecurrence={handleUpdateTaskRecurrence}
             onDropTask={handleDropTask}
           />
 
@@ -368,6 +483,7 @@ export default function App() {
             onDeleteTask={handleDeleteTask}
             onUpdateTaskTitle={handleUpdateTaskTitle}
             onUpdateTaskDueDate={handleUpdateTaskDueDate}
+            onUpdateTaskRecurrence={handleUpdateTaskRecurrence}
             onDropTask={handleDropTask}
           />
 
@@ -391,6 +507,7 @@ export default function App() {
             onDeleteTask={handleDeleteTask}
             onUpdateTaskTitle={handleUpdateTaskTitle}
             onUpdateTaskDueDate={handleUpdateTaskDueDate}
+            onUpdateTaskRecurrence={handleUpdateTaskRecurrence}
             onDropTask={handleDropTask}
           />
 
@@ -414,6 +531,7 @@ export default function App() {
             onDeleteTask={handleDeleteTask}
             onUpdateTaskTitle={handleUpdateTaskTitle}
             onUpdateTaskDueDate={handleUpdateTaskDueDate}
+            onUpdateTaskRecurrence={handleUpdateTaskRecurrence}
             onDropTask={handleDropTask}
           />
         </div>
