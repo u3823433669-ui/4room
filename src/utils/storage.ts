@@ -1,10 +1,12 @@
-import { Task, User, AuthState } from '../types';
+import { Task, User, AuthState, CountdownItem } from '../types';
 import { INITIAL_DEMO_TASKS } from './constants';
 import { checkAndEscalateTasks } from './escalation';
+import { INITIAL_DEMO_COUNTDOWNS } from './countdown';
 
 const TOKEN_KEY = 'focus_matrix_auth_token';
 const USER_KEY = 'focus_matrix_user';
 const LOCAL_STORAGE_KEY = 'focus_matrix_local_tasks';
+const LOCAL_COUNTDOWNS_KEY = 'focus_matrix_local_countdowns';
 
 export function getStoredAuth(): AuthState {
   try {
@@ -135,6 +137,96 @@ export function syncTasksToCloud(
       }
     } catch {
       // offline fallback is safe in local storage
+    }
+  }, 400);
+}
+
+// ==========================================
+// Countdowns Storage (倒数日与目标进度)
+// ==========================================
+
+export function loadLocalCountdowns(username?: string): CountdownItem[] {
+  const key = username ? `${LOCAL_COUNTDOWNS_KEY}_${username}` : LOCAL_COUNTDOWNS_KEY;
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw !== null) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.warn('[Storage] Error loading local countdowns:', e);
+  }
+
+  saveLocalCountdowns(INITIAL_DEMO_COUNTDOWNS, username);
+  return INITIAL_DEMO_COUNTDOWNS;
+}
+
+export function saveLocalCountdowns(items: CountdownItem[], username?: string): void {
+  const key = username ? `${LOCAL_COUNTDOWNS_KEY}_${username}` : LOCAL_COUNTDOWNS_KEY;
+  try {
+    localStorage.setItem(key, JSON.stringify(items));
+  } catch (e) {
+    console.error('[Storage] Error saving local countdowns:', e);
+  }
+}
+
+export async function fetchCloudCountdowns(token: string): Promise<CountdownItem[] | null> {
+  try {
+    const res = await fetch('/api/v1/countdowns', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.countdowns)) {
+        return data.countdowns;
+      }
+    }
+  } catch (err) {
+    console.warn('[Cloud Fetch Countdowns] Error:', err);
+  }
+  return null;
+}
+
+let countdownSyncTimer: NodeJS.Timeout | null = null;
+
+export function syncCountdownsToCloud(
+  countdowns: CountdownItem[],
+  token: string | null,
+  username?: string,
+  onRemoteMerged?: (items: CountdownItem[]) => void
+): void {
+  saveLocalCountdowns(countdowns, username);
+
+  if (!token) return;
+
+  if (countdownSyncTimer) {
+    clearTimeout(countdownSyncTimer);
+  }
+
+  countdownSyncTimer = setTimeout(async () => {
+    try {
+      const res = await fetch('/api/v1/countdowns/sync', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ countdowns }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.countdowns) && onRemoteMerged) {
+          saveLocalCountdowns(data.countdowns, username);
+          onRemoteMerged(data.countdowns);
+        }
+      }
+    } catch {
+      // offline fallback
     }
   }, 400);
 }

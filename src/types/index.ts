@@ -33,3 +33,24 @@ export interface AuthState {
   user: User | null;
   token: string | null;
 }
+
+export type CountdownCategory = 'life' | 'work' | 'exam' | 'anniversary' | 'health' | 'other';
+
+export interface CountdownMilestone {
+  id: string;
+  title: string;
+  completed: boolean;
+}
+
+export interface CountdownItem {
+  id: string;
+  title: string;                 // e.g. "距离2027考研", "距离结婚纪念日"
+  targetDate: string;            // YYYY-MM-DD
+  startDate?: string | null;     // YYYY-MM-DD
+  category: CountdownCategory;   // 分类
+  isPinned?: boolean;            // 置顶显示
+  notes?: string;                // 备注寄语
+  milestones?: CountdownMilestone[]; // 阶段目标清单，用于计算打卡完成进度
+  createdAt: number;
+  updatedAt: number;
+}

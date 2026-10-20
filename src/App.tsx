@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   LayoutGrid,
   Eye,
@@ -6,12 +6,13 @@ import {
   Moon,
   Sun,
   BarChart3,
+  Timer,
   User as UserIcon,
   LogOut,
   Zap,
   Sparkles,
 } from 'lucide-react';
-import { Task, QuadrantId, AuthState, User, RecurrenceType } from './types';
+import { Task, QuadrantId, AuthState, User, RecurrenceType, CountdownItem } from './types';
 import {
   loadLocalTasks,
   saveLocalTasks,
@@ -21,11 +22,17 @@ import {
   fetchCloudTasks,
   syncTasksToCloud,
   deleteCloudTask,
+  loadLocalCountdowns,
+  saveLocalCountdowns,
+  fetchCloudCountdowns,
+  syncCountdownsToCloud,
 } from './utils/storage';
 import { checkAndEscalateTasks } from './utils/escalation';
 import { computeNextDueDate } from './utils/recurrence';
+import { calculateCountdownStats } from './utils/countdown';
 import { MinimalQuadrant } from './components/MinimalQuadrant';
 import { CompletionStatsModal } from './components/CompletionStatsModal';
+import { CountdownModal } from './components/CountdownModal';
 import { AuthModal } from './components/AuthModal';
 
 export default function App() {
@@ -34,7 +41,21 @@ export default function App() {
     loadLocalTasks(authState.user?.username)
   );
 
-  const [hideCompleted, setHideCompleted] = useState<boolean>(false);
+  // Requirement 1: Persist hide completed tasks state across page refreshes
+  const [hideCompleted, setHideCompleted] = useState<boolean>(() => {
+    return localStorage.getItem('focus_matrix_hide_completed') === 'true';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('focus_matrix_hide_completed', String(hideCompleted));
+  }, [hideCompleted]);
+
+  // Requirement 2: Dedicated countdown & milestone progress tracker
+  const [countdowns, setCountdowns] = useState<CountdownItem[]>(() =>
+    loadLocalCountdowns(authState.user?.username)
+  );
+  const [isCountdownModalOpen, setIsCountdownModalOpen] = useState<boolean>(false);
+
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     return localStorage.getItem('focus_matrix_theme') === 'dark';
   });
@@ -56,7 +77,7 @@ export default function App() {
     }
   }, [isDarkMode]);
 
-  // Pull cloud tasks when user logs in or mounts
+  // Pull cloud tasks and countdowns when user logs in or mounts
   useEffect(() => {
     async function loadCloud() {
       if (authState.token && authState.user) {
@@ -65,6 +86,11 @@ export default function App() {
           const { tasks: escalated } = checkAndEscalateTasks(cloudTasks);
           setTasks(escalated);
           saveLocalTasks(escalated, authState.user.username);
+        }
+        const cloudCountdowns = await fetchCloudCountdowns(authState.token);
+        if (cloudCountdowns !== null) {
+          setCountdowns(cloudCountdowns);
+          saveLocalCountdowns(cloudCountdowns, authState.user.username);
         }
       }
     }
@@ -90,6 +116,78 @@ export default function App() {
     const interval = setInterval(runEscalation, 15 * 60 * 1000);
     return () => clearInterval(interval);
   }, [authState.token, authState.user]);
+
+  // Update countdowns helper with cloud sync
+  const updateCountdowns = (updater: (prev: CountdownItem[]) => CountdownItem[]) => {
+    setCountdowns(prev => {
+      const next = updater(prev);
+      syncCountdownsToCloud(
+        next,
+        authState.token,
+        authState.user?.username,
+        merged => setCountdowns(merged)
+      );
+      return next;
+    });
+  };
+
+  const handleSaveCountdown = (item: CountdownItem) => {
+    updateCountdowns(prev => {
+      const index = prev.findIndex(c => c.id === item.id);
+      if (index >= 0) {
+        const copy = [...prev];
+        copy[index] = item;
+        return copy;
+      }
+      return [item, ...prev];
+    });
+  };
+
+  const handleDeleteCountdown = (id: string) => {
+    updateCountdowns(prev => prev.filter(c => c.id !== id));
+  };
+
+  const handleToggleMilestone = (countdownId: string, milestoneId: string) => {
+    updateCountdowns(prev =>
+      prev.map(c => {
+        if (c.id !== countdownId || !c.milestones) return c;
+        return {
+          ...c,
+          milestones: c.milestones.map(m =>
+            m.id === milestoneId ? { ...m, completed: !m.completed } : m
+          ),
+          updatedAt: Date.now(),
+        };
+      })
+    );
+  };
+
+  const handleAddMilestone = (countdownId: string, milestoneTitle: string) => {
+    updateCountdowns(prev =>
+      prev.map(c => {
+        if (c.id !== countdownId) return c;
+        const currentMilestones = c.milestones || [];
+        return {
+          ...c,
+          milestones: [
+            ...currentMilestones,
+            {
+              id: `m_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+              title: milestoneTitle,
+              completed: false,
+            },
+          ],
+          updatedAt: Date.now(),
+        };
+      })
+    );
+  };
+
+  const handleTogglePin = (id: string) => {
+    updateCountdowns(prev =>
+      prev.map(c => (c.id === id ? { ...c, isPinned: !c.isPinned, updatedAt: Date.now() } : c))
+    );
+  };
 
   // Update tasks helper with auto-escalation check and cloud sync
   const updateTasks = (updater: (prev: Task[]) => Task[]) => {
@@ -118,6 +216,11 @@ export default function App() {
       setTasks(escalated);
       saveLocalTasks(escalated, user.username);
     }
+    const cloudCountdowns = await fetchCloudCountdowns(token);
+    if (cloudCountdowns) {
+      setCountdowns(cloudCountdowns);
+      saveLocalCountdowns(cloudCountdowns, user.username);
+    }
   };
 
   // Logout
@@ -125,9 +228,11 @@ export default function App() {
     clearStoredAuth();
     setAuthState({ token: null, user: null });
     setShowUserDropdown(false);
-    // Reload guest tasks
+    // Reload guest tasks & countdowns
     const guestTasks = loadLocalTasks();
     setTasks(guestTasks);
+    const guestCountdowns = loadLocalCountdowns();
+    setCountdowns(guestCountdowns);
   };
 
   // Add task with optional due date, recurrence and advanceDays
@@ -311,6 +416,15 @@ export default function App() {
     });
   };
 
+  // Nearest upcoming countdown for header button badge
+  const nearestCountdown = useMemo(() => {
+    const upcoming = countdowns
+      .map(item => ({ item, stats: calculateCountdownStats(item) }))
+      .filter(x => x.stats.status !== 'passed')
+      .sort((a, b) => a.stats.daysDiff - b.stats.daysDiff);
+    return upcoming[0] || null;
+  }, [countdowns]);
+
   return (
     <div className="min-h-screen bg-[#f8fafc] dark:bg-[#0f172a] text-slate-800 dark:text-slate-100 flex flex-col font-sans transition-colors duration-200">
       {/* Top Header */}
@@ -333,6 +447,21 @@ export default function App() {
 
           {/* Right: Actions */}
           <div className="flex items-center space-x-2 sm:space-x-2.5">
+            {/* Standalone Countdown & Milestone Progress Button */}
+            <button
+              onClick={() => setIsCountdownModalOpen(true)}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-amber-200 dark:border-amber-800/80 bg-amber-50/80 dark:bg-amber-950/40 text-xs font-semibold text-amber-700 dark:text-amber-300 hover:bg-amber-100/90 dark:hover:bg-amber-900/50 shadow-2xs transition-colors cursor-pointer"
+              title="打开单独的倒数日与目标进度看板"
+            >
+              <Timer className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+              <span>倒数日</span>
+              {nearestCountdown && (
+                <span className="hidden sm:inline-flex items-center px-1.5 py-0.2 text-[10px] bg-amber-200/90 dark:bg-amber-800 text-amber-900 dark:text-amber-100 rounded-full font-bold">
+                  {nearestCountdown.stats.daysDiff === 0 ? '今天' : `${nearestCountdown.stats.daysDiff}天`}
+                </span>
+              )}
+            </button>
+
             {/* Daily Completion Chart Button */}
             <button
               onClick={() => setIsStatsModalOpen(true)}
@@ -543,6 +672,18 @@ export default function App() {
         onClose={() => setIsStatsModalOpen(false)}
         tasks={tasks}
         onReopenTask={handleReopenTask}
+      />
+
+      {/* Standalone Countdown & Milestone Progress Modal */}
+      <CountdownModal
+        isOpen={isCountdownModalOpen}
+        onClose={() => setIsCountdownModalOpen(false)}
+        countdowns={countdowns}
+        onSaveCountdown={handleSaveCountdown}
+        onDeleteCountdown={handleDeleteCountdown}
+        onToggleMilestone={handleToggleMilestone}
+        onAddMilestone={handleAddMilestone}
+        onTogglePin={handleTogglePin}
       />
 
       {/* User Login / Register Modal */}

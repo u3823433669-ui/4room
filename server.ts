@@ -29,6 +29,25 @@ interface Task {
   updatedAt: number;
 }
 
+interface CountdownMilestone {
+  id: string;
+  title: string;
+  completed: boolean;
+}
+
+interface CountdownItem {
+  id: string;
+  title: string;
+  targetDate: string;
+  startDate?: string | null;
+  category: 'life' | 'work' | 'exam' | 'anniversary' | 'health' | 'other';
+  isPinned?: boolean;
+  notes?: string;
+  milestones?: CountdownMilestone[];
+  createdAt: number;
+  updatedAt: number;
+}
+
 interface User {
   id: string;
   username: string;
@@ -39,9 +58,11 @@ interface User {
 const DATA_DIR = path.join(__dirname, '.data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const TASKS_FILE = path.join(DATA_DIR, 'user_tasks.json');
+const COUNTDOWNS_FILE = path.join(DATA_DIR, 'user_countdowns.json');
 
 let users: Map<string, User> = new Map(); // username -> User
 let userTasks: Map<string, Task[]> = new Map(); // username -> Task[]
+let userCountdowns: Map<string, CountdownItem[]> = new Map(); // username -> CountdownItem[]
 
 // Helper password hash
 function hashPassword(password: string): string {
@@ -69,6 +90,15 @@ function initDb() {
         }
       }
     }
+    if (fs.existsSync(COUNTDOWNS_FILE)) {
+      const content = fs.readFileSync(COUNTDOWNS_FILE, 'utf-8');
+      const parsed = JSON.parse(content);
+      for (const [k, v] of Object.entries(parsed)) {
+        if (Array.isArray(v)) {
+          userCountdowns.set(k.toLowerCase(), v as CountdownItem[]);
+        }
+      }
+    }
   } catch (err) {
     console.warn('[Db init warning]', err);
   }
@@ -90,6 +120,12 @@ function saveDb() {
       tasksObj[k] = v;
     });
     fs.writeFileSync(TASKS_FILE, JSON.stringify(tasksObj, null, 2), 'utf-8');
+
+    const countdownsObj: Record<string, CountdownItem[]> = {};
+    userCountdowns.forEach((v, k) => {
+      countdownsObj[k] = v;
+    });
+    fs.writeFileSync(COUNTDOWNS_FILE, JSON.stringify(countdownsObj, null, 2), 'utf-8');
   } catch (err) {
     console.warn('[Db save warning]', err);
   }
@@ -241,6 +277,61 @@ app.delete('/api/v1/tasks/:id', authenticate, (req, res) => {
     userTasks.set(username, filtered);
     saveDb();
     res.json({ success: true, tasks: filtered, serverTimestamp: Date.now() });
+  } catch (err) {
+    res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+// ==========================================
+// Countdown & Milestones Endpoints
+// ==========================================
+
+// Get user countdowns
+app.get('/api/v1/countdowns', authenticate, (req, res) => {
+  const username = (req as unknown as { currentUser: string }).currentUser;
+  const countdowns = userCountdowns.get(username) || [];
+  res.json({ success: true, countdowns, serverTimestamp: Date.now() });
+});
+
+// Sync user countdowns
+app.post('/api/v1/countdowns/sync', authenticate, (req, res) => {
+  try {
+    const username = (req as unknown as { currentUser: string }).currentUser;
+    const { countdowns } = req.body;
+
+    if (!Array.isArray(countdowns)) {
+      return res.status(400).json({ success: false, error: 'countdowns must be an array' });
+    }
+
+    const validCountdowns: CountdownItem[] = countdowns
+      .filter((c: any) => c && typeof c.id === 'string' && typeof c.title === 'string' && typeof c.targetDate === 'string')
+      .map((c: any) => ({
+        id: String(c.id),
+        title: String(c.title).trim(),
+        targetDate: String(c.targetDate),
+        startDate: c.startDate ? String(c.startDate) : null,
+        category: ['life', 'work', 'exam', 'anniversary', 'health', 'other'].includes(c.category)
+          ? c.category
+          : 'other',
+        isPinned: Boolean(c.isPinned),
+        notes: c.notes ? String(c.notes) : '',
+        milestones: Array.isArray(c.milestones)
+          ? c.milestones
+              .filter((m: any) => m && typeof m.title === 'string')
+              .map((m: any) => ({
+                id: String(m.id || `m_${Math.random().toString(36).substring(2, 7)}`),
+                title: String(m.title).trim(),
+                completed: Boolean(m.completed),
+              }))
+          : [],
+        createdAt: typeof c.createdAt === 'number' ? c.createdAt : Date.now(),
+        updatedAt: typeof c.updatedAt === 'number' ? c.updatedAt : Date.now(),
+      }));
+
+    userCountdowns.set(username, validCountdowns);
+    saveDb();
+
+    res.json({ success: true, countdowns: validCountdowns, serverTimestamp: Date.now() });
   } catch (err) {
     res.status(500).json({ success: false, error: String(err) });
   }
