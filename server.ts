@@ -181,18 +181,52 @@ app.post('/api/v1/auth/register', (req, res) => {
   });
 });
 
-// Login
+// Login (with auto-register option and distinct error codes)
 app.post('/api/v1/auth/login', (req, res) => {
-  const { username, password } = req.body;
+  const { username, password, autoRegister } = req.body;
   if (!username || !password) {
     return res.status(400).json({ success: false, error: '请输入用户名和密码' });
   }
 
   const cleanUser = username.trim().toLowerCase();
-  const existing = users.get(cleanUser);
+  let existing = users.get(cleanUser);
 
-  if (!existing || existing.passwordHash !== hashPassword(password)) {
-    return res.status(400).json({ success: false, error: '用户名或密码错误' });
+  // If user does not exist but requested autoRegister
+  if (!existing && autoRegister) {
+    if (cleanUser.length < 2 || cleanUser.length > 20) {
+      return res.status(400).json({ success: false, error: '用户名长度需在 2 到 20 个字符之间' });
+    }
+    if (password.length < 4) {
+      return res.status(400).json({ success: false, error: '密码长度至少需 4 个字符' });
+    }
+
+    const newUser: User = {
+      id: `u_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      username: cleanUser,
+      passwordHash: hashPassword(password),
+      createdAt: Date.now(),
+    };
+
+    users.set(cleanUser, newUser);
+    userTasks.set(cleanUser, []);
+    saveDb();
+    existing = newUser;
+  }
+
+  if (!existing) {
+    return res.status(404).json({
+      success: false,
+      code: 'USER_NOT_FOUND',
+      error: '该用户名尚未注册，请先点击【去注册】或直接点击下方【一键注册并登录】',
+    });
+  }
+
+  if (existing.passwordHash !== hashPassword(password)) {
+    return res.status(400).json({
+      success: false,
+      code: 'WRONG_PASSWORD',
+      error: '密码错误，请检查大小写后重新输入',
+    });
   }
 
   const token = `token_${Date.now()}_${crypto.randomBytes(16).toString('hex')}`;

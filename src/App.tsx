@@ -224,15 +224,23 @@ export default function App() {
 
     // Fetch user cloud tasks
     const cloudTasks = await fetchCloudTasks(token);
-    if (cloudTasks) {
+    if (cloudTasks && cloudTasks.length > 0) {
       const { tasks: escalated } = checkAndEscalateTasks(cloudTasks);
       setTasks(escalated);
       saveLocalTasks(escalated, user.username);
+    } else if (tasks.length > 0) {
+      // First-time login/register: upload current on-screen tasks to cloud so they aren't lost!
+      syncTasksToCloud(tasks, token, user.username);
+      saveLocalTasks(tasks, user.username);
     }
+
     const cloudCountdowns = await fetchCloudCountdowns(token);
-    if (cloudCountdowns) {
+    if (cloudCountdowns && cloudCountdowns.length > 0) {
       setCountdowns(cloudCountdowns);
       saveLocalCountdowns(cloudCountdowns, user.username);
+    } else if (countdowns.length > 0) {
+      syncCountdownsToCloud(countdowns, token, user.username);
+      saveLocalCountdowns(countdowns, user.username);
     }
   };
 
