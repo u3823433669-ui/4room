@@ -23,7 +23,9 @@ interface Task {
   dueDate?: string | null;
   autoEscalatedFrom?: 'q1' | 'q2' | 'q3' | 'q4' | null;
   recurrence?: 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly' | null;
+  weekdays?: number[] | null;
   advanceDays?: number | null;
+  folder?: string | null;
   recurringParentId?: string | null;
   createdAt: number;
   updatedAt: number;
@@ -299,7 +301,9 @@ app.post('/api/v1/tasks/sync', authenticate, (req, res) => {
         dueDate: t.dueDate ? String(t.dueDate) : null,
         autoEscalatedFrom: t.autoEscalatedFrom || null,
         recurrence: ['daily', 'weekly', 'monthly', 'yearly', 'none'].includes(t.recurrence) ? t.recurrence : null,
+        weekdays: Array.isArray(t.weekdays) ? t.weekdays.filter((d: any) => typeof d === 'number') : null,
         advanceDays: typeof t.advanceDays === 'number' ? t.advanceDays : (t.advanceDays === null ? null : undefined),
+        folder: t.folder ? String(t.folder).trim() : null,
         recurringParentId: t.recurringParentId ? String(t.recurringParentId) : null,
         createdAt: typeof t.createdAt === 'number' ? t.createdAt : Date.now(),
         updatedAt: typeof t.updatedAt === 'number' ? t.updatedAt : Date.now(),

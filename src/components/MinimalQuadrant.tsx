@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Plus,
   Trash2,
@@ -12,10 +12,15 @@ import {
   ChevronRight,
   Clock,
   Sparkles,
-  Eye,
   Settings2,
+  List,
+  StickyNote,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  Tag,
 } from 'lucide-react';
-import { QuadrantId, Task, RecurrenceType } from '../types';
+import { QuadrantId, Task, RecurrenceType, QuadrantViewMode } from '../types';
 import { sound } from '../utils/sound';
 import { getDueDateStatus } from '../utils/escalation';
 import {
@@ -41,13 +46,15 @@ interface MinimalQuadrantProps {
   buttonBg: string;
   tasks: Task[];
   hideCompleted: boolean;
+  globalViewMode?: QuadrantViewMode;
   onAddTask: (
     title: string,
     quadrant: QuadrantId,
     dueDate?: string | null,
     recurrence?: RecurrenceType | null,
     advanceDays?: number | null,
-    weekdays?: number[] | null
+    weekdays?: number[] | null,
+    folder?: string | null
   ) => void;
   onToggleTask: (id: string) => void;
   onDeleteTask: (id: string) => void;
@@ -60,6 +67,7 @@ interface MinimalQuadrantProps {
     newDueDate?: string | null,
     weekdays?: number[] | null
   ) => void;
+  onUpdateTaskFolder?: (id: string, folder: string | null) => void;
   onDropTask: (taskId: string, targetQuadrant: QuadrantId) => void;
 }
 
@@ -81,6 +89,8 @@ const ADVANCE_DAYS_OPTIONS = [
   { value: null, label: '始终显示 (不隐藏)' },
 ];
 
+const DEFAULT_FOLDERS = ['工作', '学习', '日常', '备忘'];
+
 export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
   id,
   title,
@@ -95,12 +105,14 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
   buttonBg,
   tasks,
   hideCompleted,
+  globalViewMode = 'list',
   onAddTask,
   onToggleTask,
   onDeleteTask,
   onUpdateTaskTitle,
   onUpdateTaskDueDate,
   onUpdateTaskRecurrence,
+  onUpdateTaskFolder,
   onDropTask,
 }) => {
   const [inputValue, setInputValue] = useState('');
@@ -108,7 +120,20 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
   const [selectedRecurrence, setSelectedRecurrence] = useState<RecurrenceType>('none');
   const [selectedWeekdays, setSelectedWeekdays] = useState<number[]>([new Date().getDay()]);
   const [selectedAdvanceDays, setSelectedAdvanceDays] = useState<number | null>(null);
+  const [selectedFolder, setSelectedFolder] = useState<string>('');
   const [showOptionsPanel, setShowOptionsPanel] = useState<boolean>(false);
+
+  // View mode: local override, fallback to global
+  const [localViewMode, setLocalViewMode] = useState<QuadrantViewMode | null>(null);
+  const currentViewMode: QuadrantViewMode = localViewMode || globalViewMode;
+
+  // Folder collapse state: folderName -> isCollapsed
+  const [collapsedFolders, setCollapsedFolders] = useState<Record<string, boolean>>({});
+
+  // Active folder for new task assignment popup
+  const [folderPickerTaskId, setFolderPickerTaskId] = useState<string | null>(null);
+  const [customFolderInput, setCustomFolderInput] = useState('');
+  const [showNewFolderModal, setShowNewFolderModal] = useState(false);
 
   const [isDragOver, setIsDragOver] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
@@ -140,7 +165,6 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
         setSelectedWeekdays(initialWeekdays);
         setSelectedDueDate(getNextOccurrenceForWeekdays(initialWeekdays));
       } else if (!selectedDueDate) {
-        // For daily, default to today; for others, set a default date
         const todayStr = new Date().toISOString().split('T')[0];
         setSelectedDueDate(todayStr);
       }
@@ -169,7 +193,8 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
       selectedDueDate || null,
       selectedRecurrence === 'none' ? null : selectedRecurrence,
       selectedAdvanceDays,
-      selectedRecurrence === 'weekly' ? selectedWeekdays : null
+      selectedRecurrence === 'weekly' ? selectedWeekdays : null,
+      selectedFolder.trim() || null
     );
     setInputValue('');
     setSelectedDueDate('');
@@ -206,9 +231,9 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
     e.dataTransfer.effectAllowed = 'move';
   };
 
-  // Pagination state: default 5 items per page (user can switch to 8 or 全部)
+  // Pagination state: default 8 items per page
   const [currentPage, setCurrentPage] = useState<number>(1);
-  const [pageSize, setPageSize] = useState<number>(5);
+  const [pageSize, setPageSize] = useState<number>(8);
 
   // Split tasks into visible matrix tasks vs. hidden upcoming recurring tasks
   const matrixTasks = tasks.filter(t => isTaskVisibleInMatrix(t));
@@ -232,6 +257,51 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
   const paginatedTasks = pageSize === 0
     ? visibleTasks
     : visibleTasks.slice((safeCurrentPage - 1) * pageSize, safeCurrentPage * pageSize);
+
+  // Folders gathering
+  const allKnownFolders = useMemo(() => {
+    const set = new Set<string>(DEFAULT_FOLDERS);
+    tasks.forEach(t => {
+      if (t.folder && t.folder.trim()) set.add(t.folder.trim());
+    });
+    return Array.from(set);
+  }, [tasks]);
+
+  // Group visible tasks by folder for Folder View
+  const groupedTasksByFolder = useMemo(() => {
+    const map = new Map<string, Task[]>();
+    visibleTasks.forEach(task => {
+      const fName = task.folder && task.folder.trim() ? task.folder.trim() : '默认待办';
+      if (!map.has(fName)) {
+        map.set(fName, []);
+      }
+      map.get(fName)!.push(task);
+    });
+    return Array.from(map.entries()).sort((a, b) => {
+      if (a[0] === '默认待办') return 1;
+      if (b[0] === '默认待办') return -1;
+      return a[0].localeCompare(b[0]);
+    });
+  }, [visibleTasks]);
+
+  const toggleFolderCollapse = (folderName: string) => {
+    setCollapsedFolders(prev => ({
+      ...prev,
+      [folderName]: !prev[folderName],
+    }));
+  };
+
+  const collapseAllFolders = () => {
+    const next: Record<string, boolean> = {};
+    groupedTasksByFolder.forEach(([name]) => {
+      next[name] = true;
+    });
+    setCollapsedFolders(next);
+  };
+
+  const expandAllFolders = () => {
+    setCollapsedFolders({});
+  };
 
   const startEditing = (task: Task) => {
     setEditingTaskId(task.id);
@@ -292,26 +362,34 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
     setEditingRecurrenceTaskId(null);
   };
 
+  // Sticker card theme colors per quadrant
+  const stickerStyles = {
+    q1: 'bg-rose-50/90 dark:bg-rose-950/40 border-rose-200/90 dark:border-rose-900/60 text-slate-800 dark:text-slate-100 hover:border-rose-300',
+    q2: 'bg-amber-50/90 dark:bg-amber-950/40 border-amber-200/90 dark:border-amber-900/60 text-slate-800 dark:text-slate-100 hover:border-amber-300',
+    q3: 'bg-blue-50/90 dark:bg-blue-950/40 border-blue-200/90 dark:border-blue-900/60 text-slate-800 dark:text-slate-100 hover:border-blue-300',
+    q4: 'bg-slate-50/95 dark:bg-slate-800/80 border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 hover:border-slate-300',
+  }[id];
+
   return (
     <div
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`flex flex-col h-[440px] sm:h-[480px] rounded-2xl border p-3.5 sm:p-4 transition-all duration-200 ${cardBg} ${borderColor} ${
+      className={`flex flex-col h-[320px] sm:h-[350px] md:h-[calc((100vh-125px)/2)] md:min-h-[260px] md:max-h-[430px] rounded-2xl border p-2.5 sm:p-3 transition-all duration-200 ${cardBg} ${borderColor} ${
         isDragOver ? 'ring-2 ring-indigo-400 bg-indigo-50/20 shadow-md' : 'shadow-2xs'
       }`}
     >
       {/* Header */}
-      <div className="flex items-center justify-between pb-3 select-none">
-        <div className="flex items-center space-x-2">
+      <div className="flex items-center justify-between pb-1.5 select-none shrink-0 border-b border-slate-200/40 dark:border-slate-700/40">
+        <div className="flex items-center space-x-1.5 min-w-0">
           {/* Dot */}
           <span className={`w-2.5 h-2.5 rounded-full ${dotColor} shrink-0`} />
-          <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 tracking-tight">
+          <h3 className="text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-100 tracking-tight truncate">
             {title}
           </h3>
           {/* Counter pill */}
           <span
-            className={`text-xs font-semibold px-2 py-0.5 rounded-full ${badgeBg} ${badgeText}`}
+            className={`text-[11px] font-semibold px-1.5 py-0.2 rounded-full ${badgeBg} ${badgeText} shrink-0`}
           >
             {count}
           </span>
@@ -321,7 +399,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
             <button
               type="button"
               onClick={() => setShowHiddenDrawer(!showHiddenDrawer)}
-              className="text-[10px] px-1.5 py-0.5 rounded-md bg-purple-100/80 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800/50 flex items-center space-x-1 cursor-pointer hover:bg-purple-200/80 transition-colors"
+              className="text-[10px] px-1.5 py-0.2 rounded-md bg-purple-100/80 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800/50 flex items-center space-x-1 cursor-pointer hover:bg-purple-200/80 transition-colors shrink-0"
               title="点击查看未到提前展示期的循环任务"
             >
               <Repeat className="w-2.5 h-2.5" />
@@ -330,72 +408,155 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
           )}
         </div>
 
-        {/* Right strategy tag */}
-        <span className={`text-xs font-medium ${strategyColor}`}>
-          {strategy}
-        </span>
+        {/* Right: Quadrant View Mode Switcher + Strategy */}
+        <div className="flex items-center space-x-1.5 shrink-0">
+          {/* 3-Mode segmented button: 清单 / 贴纸 / 文件夹 */}
+          <div className="flex items-center bg-white/80 dark:bg-slate-800/80 p-0.5 rounded-lg border border-slate-200/80 dark:border-slate-700/80 text-[10px] shadow-2xs">
+            <button
+              type="button"
+              onClick={() => setLocalViewMode('list')}
+              className={`p-1 rounded transition-colors cursor-pointer ${
+                currentViewMode === 'list'
+                  ? 'bg-indigo-600 text-white font-bold shadow-2xs'
+                  : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+              }`}
+              title="切换为：紧凑清单列表"
+            >
+              <List className="w-3 h-3" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setLocalViewMode('sticker')}
+              className={`p-1 rounded transition-colors cursor-pointer ${
+                currentViewMode === 'sticker'
+                  ? 'bg-indigo-600 text-white font-bold shadow-2xs'
+                  : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+              }`}
+              title="切换为：贴纸便签（双列紧凑，一屏放双倍）"
+            >
+              <StickyNote className="w-3 h-3" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setLocalViewMode('folder')}
+              className={`p-1 rounded transition-colors cursor-pointer ${
+                currentViewMode === 'folder'
+                  ? 'bg-indigo-600 text-white font-bold shadow-2xs'
+                  : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+              }`}
+              title="切换为：文件夹折叠分组（分类收纳，极省空间）"
+            >
+              <Folder className="w-3 h-3" />
+            </button>
+          </div>
+
+          <span className={`text-[11px] font-semibold ${strategyColor} hidden xs:inline`}>
+            {strategy}
+          </span>
+        </div>
       </div>
 
-      {/* Task List (scrollable) */}
-      <div className="flex-1 overflow-y-auto space-y-1.5 py-1 pr-0.5">
+      {/* Task List / Stickers / Folders Area (scrollable) */}
+      <div className="flex-1 overflow-y-auto py-1 pr-0.5 min-h-0">
         {visibleTasks.length === 0 && hiddenRecurringTasks.length === 0 ? (
           <div className="h-full flex items-center justify-center text-xs text-slate-400 dark:text-slate-500 italic select-none">
             {isDragOver ? '放置任务到此象限' : '暂无任务，可在下方快速添加'}
           </div>
         ) : visibleTasks.length === 0 && hiddenRecurringTasks.length > 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-xs text-slate-400 dark:text-slate-500 text-center space-y-1 select-none p-4">
-            <Repeat className="w-6 h-6 text-purple-400 dark:text-purple-500 animate-spin-slow mb-1" />
+          <div className="h-full flex flex-col items-center justify-center text-xs text-slate-400 dark:text-slate-500 text-center space-y-1 select-none p-3">
+            <Repeat className="w-5 h-5 text-purple-400 dark:text-purple-500 animate-spin-slow mb-0.5" />
             <p className="font-semibold text-slate-600 dark:text-slate-300">
               当前无待处理任务
             </p>
             <p className="text-[11px] text-slate-400">
-              有 {hiddenRecurringTasks.length} 个周期任务尚未到达展示时间（如生日提前15天自动显示）
+              有 {hiddenRecurringTasks.length} 个周期任务尚未到达展示时间
             </p>
             <button
               type="button"
               onClick={() => setShowHiddenDrawer(true)}
-              className="text-xs text-purple-600 dark:text-purple-400 font-semibold underline mt-2 cursor-pointer"
+              className="text-xs text-purple-600 dark:text-purple-400 font-semibold underline mt-1 cursor-pointer"
             >
               展开查看未到期周期任务
             </button>
           </div>
-        ) : (
-          paginatedTasks.map(task => {
-            const dueStatus = getDueDateStatus(task.dueDate);
-            const isRecurring = task.recurrence && task.recurrence !== 'none';
+        ) : currentViewMode === 'sticker' ? (
+          /* ================================================= */
+          /* STICKER / STICKY NOTES VIEW: 2-column compact grid */
+          /* ================================================= */
+          <div className="grid grid-cols-2 gap-1.5">
+            {paginatedTasks.map(task => {
+              const dueStatus = getDueDateStatus(task.dueDate);
+              const isRecurring = task.recurrence && task.recurrence !== 'none';
+              const isQ4 = id === 'q4';
+              const isTodayDeadline = dueStatus.text === '今天截止';
+              const isDailyOverdueInQ4 = isQ4 && task.recurrence === 'daily' && dueStatus.isOverdue;
+              const shouldShowDueBadge = Boolean(
+                task.dueDate &&
+                !(isQ4 && isTodayDeadline) &&
+                !isDailyOverdueInQ4
+              );
 
-            return (
-              <div
-                key={task.id}
-                draggable={true}
-                onDragStart={e => handleDragStart(e, task)}
-                className={`group flex items-center justify-between bg-white dark:bg-slate-800/90 rounded-lg px-2.5 py-1.5 sm:px-3 sm:py-2 border border-slate-200/70 dark:border-slate-700/70 shadow-2xs transition-all hover:shadow-xs hover:border-slate-300 dark:hover:border-slate-600 ${
-                  task.completed ? 'opacity-60 bg-slate-50/60 dark:bg-slate-800/40' : ''
-                }`}
-              >
-                <div className="flex items-center space-x-2.5 flex-1 min-w-0 mr-1.5">
-                  {/* Square outline checkbox */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onToggleTask(task.id);
-                      if (!task.completed) {
-                        sound.playComplete();
-                      } else {
-                        sound.playPop();
-                      }
-                    }}
-                    className={`w-3.5 h-3.5 sm:w-4 sm:h-4 rounded border flex items-center justify-center transition-colors shrink-0 cursor-pointer ${
-                      task.completed
-                        ? 'bg-indigo-600 border-indigo-600 text-white'
-                        : 'border-slate-300 dark:border-slate-500 hover:border-indigo-500 bg-white dark:bg-slate-900'
-                    }`}
-                  >
-                    {task.completed && <Check className="w-2.5 h-2.5 sm:w-3 sm:h-3 stroke-[3]" />}
-                  </button>
+              return (
+                <div
+                  key={task.id}
+                  draggable={true}
+                  onDragStart={e => handleDragStart(e, task)}
+                  className={`group relative flex flex-col justify-between p-2 rounded-xl border shadow-2xs transition-all hover:shadow-xs ${stickerStyles} ${
+                    task.completed ? 'opacity-55' : ''
+                  }`}
+                >
+                  {/* Top: checkbox + folder + actions */}
+                  <div className="flex items-center justify-between space-x-1 mb-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onToggleTask(task.id);
+                        if (!task.completed) sound.playComplete();
+                        else sound.playPop();
+                      }}
+                      className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors shrink-0 cursor-pointer ${
+                        task.completed
+                          ? 'bg-indigo-600 border-indigo-600 text-white'
+                          : 'border-slate-300 dark:border-slate-500 hover:border-indigo-500 bg-white dark:bg-slate-900'
+                      }`}
+                    >
+                      {task.completed && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                    </button>
 
-                  {/* Task Title (Editable) */}
-                  <div className="flex-1 min-w-0 flex flex-wrap items-center gap-1 sm:gap-1.5">
+                    {/* Folder Pill */}
+                    {task.folder ? (
+                      <button
+                        type="button"
+                        onClick={() => setFolderPickerTaskId(task.id)}
+                        className="text-[9px] px-1 py-0.2 rounded font-medium bg-indigo-100/80 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 truncate max-w-[70px] cursor-pointer"
+                        title={`所属文件夹: ${task.folder} (点击修改)`}
+                      >
+                        📁 {task.folder}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setFolderPickerTaskId(task.id)}
+                        className="opacity-0 group-hover:opacity-100 text-[9px] text-slate-400 hover:text-indigo-600 transition-opacity"
+                        title="添加到文件夹"
+                      >
+                        +文件夹
+                      </button>
+                    )}
+
+                    {/* Delete button */}
+                    <button
+                      type="button"
+                      onClick={() => onDeleteTask(task.id)}
+                      className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-rose-500 transition-opacity p-0.5 cursor-pointer"
+                      title="删除"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+
+                  {/* Middle: Title */}
+                  <div className="flex-1 my-0.5">
                     {editingTaskId === task.id ? (
                       <input
                         type="text"
@@ -407,64 +568,336 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                           if (e.key === 'Enter') saveEditing(task.id);
                           if (e.key === 'Escape') setEditingTaskId(null);
                         }}
-                        className="flex-1 text-xs sm:text-[13px] bg-transparent border-b border-indigo-500 outline-none text-slate-800 dark:text-slate-100 py-0.5"
+                        className="w-full text-xs bg-white dark:bg-slate-900 border border-indigo-500 rounded px-1 py-0.5 outline-none"
                       />
                     ) : (
-                      <span
+                      <p
                         onClick={() => startEditing(task)}
-                        className={`text-xs sm:text-[13px] leading-tight break-words cursor-text select-text ${
-                          task.completed
-                            ? 'line-through text-slate-400 dark:text-slate-500'
-                            : 'text-slate-800 dark:text-slate-200'
+                        className={`text-xs font-medium leading-snug line-clamp-2 cursor-text ${
+                          task.completed ? 'line-through text-slate-400' : ''
                         }`}
+                        title="点击直接修改标题"
                       >
                         {task.title}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Bottom: Badges */}
+                  <div className="flex flex-wrap items-center gap-1 pt-1 mt-auto border-t border-slate-200/40 dark:border-slate-700/40">
+                    {isRecurring && (
+                      <span
+                        onClick={() => openRecurrenceEditor(task)}
+                        className="inline-flex items-center space-x-0.5 text-[9px] px-1 py-0.2 rounded bg-purple-100/90 dark:bg-purple-900/60 text-purple-700 dark:text-purple-300 font-semibold cursor-pointer"
+                        title="循环任务"
+                      >
+                        <Repeat className="w-2.5 h-2.5" />
+                        <span>{getRecurrenceLabel(task.recurrence, task.weekdays)}</span>
                       </span>
                     )}
 
-                    {/* Recurrence Badge */}
-                    {isRecurring && (
+                    {shouldShowDueBadge && (
+                      <span
+                        className={`inline-flex items-center space-x-0.5 text-[9px] px-1 py-0.2 rounded font-medium ${
+                          dueStatus.isOverdue
+                            ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/80 dark:text-rose-300'
+                            : 'bg-slate-100 text-slate-600 dark:bg-slate-700/70 dark:text-slate-300'
+                        }`}
+                      >
+                        <Calendar className="w-2.5 h-2.5" />
+                        <span>{dueStatus.text}</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : currentViewMode === 'folder' ? (
+          /* ================================================= */
+          /* FOLDER / COLLAPSIBLE CATEGORIES VIEW              */
+          /* ================================================= */
+          <div className="space-y-1.5">
+            {/* Quick folder action controls */}
+            <div className="flex items-center justify-between px-1 text-[10px] text-slate-500 dark:text-slate-400">
+              <div className="flex items-center space-x-1">
+                <span>共 {groupedTasksByFolder.length} 个分类文件夹</span>
+              </div>
+              <div className="flex items-center space-x-1.5">
+                <button
+                  type="button"
+                  onClick={collapseAllFolders}
+                  className="hover:text-indigo-600 cursor-pointer"
+                >
+                  全部折叠
+                </button>
+                <span>·</span>
+                <button
+                  type="button"
+                  onClick={expandAllFolders}
+                  className="hover:text-indigo-600 cursor-pointer"
+                >
+                  全部展开
+                </button>
+                <span>·</span>
+                <button
+                  type="button"
+                  onClick={() => setShowNewFolderModal(true)}
+                  className="text-indigo-600 dark:text-indigo-400 font-bold hover:underline cursor-pointer flex items-center space-x-0.5"
+                >
+                  <FolderPlus className="w-3 h-3" />
+                  <span>新建文件夹</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Folder Groups */}
+            {groupedTasksByFolder.map(([folderName, folderTasks]) => {
+              const isCollapsed = Boolean(collapsedFolders[folderName]);
+              const completedCount = folderTasks.filter(t => t.completed).length;
+
+              return (
+                <div
+                  key={folderName}
+                  className="rounded-xl border border-slate-200/80 dark:border-slate-700/70 bg-white/70 dark:bg-slate-800/60 overflow-hidden shadow-2xs"
+                >
+                  {/* Folder Accordion Header */}
+                  <div
+                    onClick={() => toggleFolderCollapse(folderName)}
+                    className="flex items-center justify-between px-2.5 py-1.5 bg-slate-100/60 dark:bg-slate-800/80 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer select-none"
+                  >
+                    <div className="flex items-center space-x-2 min-w-0">
+                      {isCollapsed ? (
+                        <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                      ) : (
+                        <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                      )}
+                      {isCollapsed ? (
+                        <Folder className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                      ) : (
+                        <FolderOpen className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                      )}
+                      <span className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate">
+                        {folderName}
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 font-semibold">
+                        {folderTasks.length - completedCount}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center space-x-1.5 text-[10px] text-slate-400">
+                      <span>{isCollapsed ? '已折叠' : '已展开'}</span>
                       <button
                         type="button"
-                        onClick={() => openRecurrenceEditor(task)}
-                        className="inline-flex items-center space-x-1 text-[10px] px-1.5 py-0.2 rounded font-semibold bg-purple-50 text-purple-700 dark:bg-purple-950/70 dark:text-purple-300 border border-purple-200/80 dark:border-purple-800/60 hover:bg-purple-100 transition-colors cursor-pointer"
-                        title="点击修改循环周期及提前展示规则"
+                        onClick={e => {
+                          e.stopPropagation();
+                          setSelectedFolder(folderName === '默认待办' ? '' : folderName);
+                        }}
+                        className="px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 font-medium cursor-pointer"
+                        title="在此文件夹下添加新任务"
                       >
-                        <Repeat className="w-2.5 h-2.5" />
-                        <span>
-                          {getRecurrenceLabel(task.recurrence, task.weekdays)}
-                          {task.advanceDays !== null && task.advanceDays !== undefined
-                            ? task.advanceDays === 0
-                              ? '·当天'
-                              : `·提前${task.advanceDays}天`
-                            : ''}
-                        </span>
+                        +添加
                       </button>
-                    )}
+                    </div>
+                  </div>
 
-                    {/* Due Date & Auto-escalation Badge */}
-                    {(() => {
-                      const isQ4 = id === 'q4';
-                      // 1. 不紧急不重要的，不要加今天截止的标签
-                      const isTodayDeadline = dueStatus.text === '今天截止';
-                      // 2. 不紧急不重要的，如果是每天重复的任务，当天没做也不显示“逾期”
-                      const isDailyOverdueInQ4 = isQ4 && task.recurrence === 'daily' && dueStatus.isOverdue;
-                      const shouldShowDueBadge = Boolean(
-                        task.dueDate &&
-                        !(isQ4 && isTodayDeadline) &&
-                        !isDailyOverdueInQ4
-                      );
+                  {/* Tasks inside folder (when expanded) */}
+                  {!isCollapsed && (
+                    <div className="p-1 space-y-1 bg-white/40 dark:bg-slate-900/30">
+                      {folderTasks.map(task => {
+                        const dueStatus = getDueDateStatus(task.dueDate);
+                        const isRecurring = task.recurrence && task.recurrence !== 'none';
 
-                      if (!shouldShowDueBadge) return null;
+                        return (
+                          <div
+                            key={task.id}
+                            draggable={true}
+                            onDragStart={e => handleDragStart(e, task)}
+                            className={`group flex items-center justify-between bg-white dark:bg-slate-800/90 rounded-lg px-2 py-1 border border-slate-200/60 dark:border-slate-700/60 transition-all hover:border-slate-300 ${
+                              task.completed ? 'opacity-60 bg-slate-50/60 dark:bg-slate-800/40' : ''
+                            }`}
+                          >
+                            <div className="flex items-center space-x-2 flex-1 min-w-0 mr-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onToggleTask(task.id);
+                                  if (!task.completed) sound.playComplete();
+                                  else sound.playPop();
+                                }}
+                                className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors shrink-0 cursor-pointer ${
+                                  task.completed
+                                    ? 'bg-indigo-600 border-indigo-600 text-white'
+                                    : 'border-slate-300 dark:border-slate-500 hover:border-indigo-500 bg-white dark:bg-slate-900'
+                                }`}
+                              >
+                                {task.completed && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                              </button>
 
-                      return (
+                              <span
+                                onClick={() => startEditing(task)}
+                                className={`text-xs leading-snug break-words flex-1 cursor-text ${
+                                  task.completed
+                                    ? 'line-through text-slate-400'
+                                    : 'text-slate-800 dark:text-slate-200'
+                                }`}
+                              >
+                                {task.title}
+                              </span>
+
+                              {isRecurring && (
+                                <span className="text-[9px] px-1 py-0.2 rounded bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300">
+                                  {getRecurrenceLabel(task.recurrence)}
+                                </span>
+                              )}
+
+                              {task.dueDate && (
+                                <span className="text-[9px] px-1 py-0.2 rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
+                                  {dueStatus.text}
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                type="button"
+                                onClick={() => setFolderPickerTaskId(task.id)}
+                                className="p-0.5 text-slate-400 hover:text-indigo-600 cursor-pointer"
+                                title="移至其他文件夹"
+                              >
+                                <Tag className="w-3 h-3" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => onDeleteTask(task.id)}
+                                className="p-0.5 text-slate-400 hover:text-rose-500 cursor-pointer"
+                                title="删除"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          /* ================================================= */
+          /* LIST VIEW: Ultra-compact, slim gap list           */
+          /* ================================================= */
+          <div className="space-y-1">
+            {paginatedTasks.map(task => {
+              const dueStatus = getDueDateStatus(task.dueDate);
+              const isRecurring = task.recurrence && task.recurrence !== 'none';
+              const isQ4 = id === 'q4';
+              const isTodayDeadline = dueStatus.text === '今天截止';
+              const isDailyOverdueInQ4 = isQ4 && task.recurrence === 'daily' && dueStatus.isOverdue;
+              const shouldShowDueBadge = Boolean(
+                task.dueDate &&
+                !(isQ4 && isTodayDeadline) &&
+                !isDailyOverdueInQ4
+              );
+
+              return (
+                <div
+                  key={task.id}
+                  draggable={true}
+                  onDragStart={e => handleDragStart(e, task)}
+                  className={`group flex items-center justify-between bg-white dark:bg-slate-800/90 rounded-lg px-2.5 py-1 sm:py-1.2 border border-slate-200/70 dark:border-slate-700/70 shadow-2xs transition-all hover:border-slate-300 dark:hover:border-slate-600 ${
+                    task.completed ? 'opacity-60 bg-slate-50/60 dark:bg-slate-800/40' : ''
+                  }`}
+                >
+                  <div className="flex items-center space-x-2 flex-1 min-w-0 mr-1.5">
+                    {/* Square checkbox */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onToggleTask(task.id);
+                        if (!task.completed) sound.playComplete();
+                        else sound.playPop();
+                      }}
+                      className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors shrink-0 cursor-pointer ${
+                        task.completed
+                          ? 'bg-indigo-600 border-indigo-600 text-white'
+                          : 'border-slate-300 dark:border-slate-500 hover:border-indigo-500 bg-white dark:bg-slate-900'
+                      }`}
+                    >
+                      {task.completed && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                    </button>
+
+                    {/* Task Title (Editable) */}
+                    <div className="flex-1 min-w-0 flex flex-wrap items-center gap-1">
+                      {editingTaskId === task.id ? (
+                        <input
+                          type="text"
+                          value={editingText}
+                          autoFocus
+                          onChange={e => setEditingText(e.target.value)}
+                          onBlur={() => saveEditing(task.id)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') saveEditing(task.id);
+                            if (e.key === 'Escape') setEditingTaskId(null);
+                          }}
+                          className="flex-1 text-xs sm:text-[13px] bg-transparent border-b border-indigo-500 outline-none text-slate-800 dark:text-slate-100 py-0.2"
+                        />
+                      ) : (
+                        <span
+                          onClick={() => startEditing(task)}
+                          className={`text-xs sm:text-[13px] leading-tight break-words cursor-text select-text ${
+                            task.completed
+                              ? 'line-through text-slate-400 dark:text-slate-500'
+                              : 'text-slate-800 dark:text-slate-200'
+                          }`}
+                        >
+                          {task.title}
+                        </span>
+                      )}
+
+                      {/* Folder Tag */}
+                      {task.folder && (
+                        <button
+                          type="button"
+                          onClick={() => setFolderPickerTaskId(task.id)}
+                          className="inline-flex items-center space-x-0.5 text-[9px] px-1.5 py-0.2 rounded font-medium bg-indigo-50 text-indigo-700 dark:bg-indigo-950/70 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-800/60 hover:bg-indigo-100 transition-colors cursor-pointer"
+                          title="点击更换文件夹"
+                        >
+                          <span>📁 {task.folder}</span>
+                        </button>
+                      )}
+
+                      {/* Recurrence Badge */}
+                      {isRecurring && (
+                        <button
+                          type="button"
+                          onClick={() => openRecurrenceEditor(task)}
+                          className="inline-flex items-center space-x-0.5 text-[9px] px-1.5 py-0.2 rounded font-semibold bg-purple-50 text-purple-700 dark:bg-purple-950/70 dark:text-purple-300 border border-purple-200/80 dark:border-purple-800/60 hover:bg-purple-100 transition-colors cursor-pointer"
+                          title="点击修改循环周期及提前展示规则"
+                        >
+                          <Repeat className="w-2.5 h-2.5" />
+                          <span>
+                            {getRecurrenceLabel(task.recurrence, task.weekdays)}
+                            {task.advanceDays !== null && task.advanceDays !== undefined
+                              ? task.advanceDays === 0
+                                ? '·当天'
+                                : `·提前${task.advanceDays}天`
+                              : ''}
+                          </span>
+                        </button>
+                      )}
+
+                      {/* Due Date & Auto-escalation Badge */}
+                      {shouldShowDueBadge && (
                         <span
                           onClick={() =>
                             setChangingDateTaskId(
                               changingDateTaskId === task.id ? null : task.id
                             )
                           }
-                          className={`inline-flex items-center space-x-1 text-[10px] px-1.5 py-0.2 rounded font-medium cursor-pointer transition-colors ${
+                          className={`inline-flex items-center space-x-1 text-[9px] px-1.5 py-0.2 rounded font-medium cursor-pointer transition-colors ${
                             dueStatus.isOverdue
                               ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/70 dark:text-rose-300 animate-pulse'
                               : dueStatus.isUrgent
@@ -481,102 +914,110 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                             </span>
                           )}
                         </span>
-                      );
-                    })()}
+                      )}
 
-                    {/* Date picker edit overlay */}
-                    {changingDateTaskId === task.id && (
-                      <div className="flex items-center space-x-1 bg-white dark:bg-slate-900 p-1 rounded-lg border border-slate-300 shadow-sm text-xs">
-                        <input
-                          type="date"
-                          defaultValue={task.dueDate || ''}
-                          onChange={e => {
-                            onUpdateTaskDueDate(task.id, e.target.value || null);
-                            setChangingDateTaskId(null);
-                          }}
-                          className="bg-transparent text-slate-700 dark:text-slate-200 text-xs outline-none"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            onUpdateTaskDueDate(task.id, null);
-                            setChangingDateTaskId(null);
-                          }}
-                          className="text-[10px] text-slate-400 hover:text-rose-500 px-1 cursor-pointer"
-                        >
-                          清除
-                        </button>
-                      </div>
-                    )}
+                      {/* Date picker edit overlay */}
+                      {changingDateTaskId === task.id && (
+                        <div className="flex items-center space-x-1 bg-white dark:bg-slate-900 p-0.5 rounded border border-slate-300 shadow-sm text-xs">
+                          <input
+                            type="date"
+                            defaultValue={task.dueDate || ''}
+                            onChange={e => {
+                              onUpdateTaskDueDate(task.id, e.target.value || null);
+                              setChangingDateTaskId(null);
+                            }}
+                            className="bg-transparent text-slate-700 dark:text-slate-200 text-xs outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onUpdateTaskDueDate(task.id, null);
+                              setChangingDateTaskId(null);
+                            }}
+                            className="text-[10px] text-slate-400 hover:text-rose-500 px-1 cursor-pointer"
+                          >
+                            清除
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
 
-                {/* Hover actions: Recurrence set + Date set + Drag handle + delete */}
-                <div className="flex items-center space-x-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    type="button"
-                    onClick={() => openRecurrenceEditor(task)}
-                    className="p-1 text-slate-300 hover:text-purple-600 transition-colors cursor-pointer"
-                    title="设置循环与提前展示规则"
-                  >
-                    <Repeat className="w-3.5 h-3.5" />
-                  </button>
-                  {!task.dueDate && (
+                  {/* Hover actions: Folder + Recurrence + Date + Delete + Drag */}
+                  <div className="flex items-center space-x-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button
                       type="button"
-                      onClick={() => setChangingDateTaskId(task.id)}
-                      className="p-1 text-slate-300 hover:text-indigo-600 transition-colors cursor-pointer"
-                      title="设置到期时间"
+                      onClick={() => setFolderPickerTaskId(task.id)}
+                      className="p-1 text-slate-400 hover:text-indigo-600 transition-colors cursor-pointer"
+                      title="移动至文件夹"
                     >
-                      <Calendar className="w-3.5 h-3.5" />
+                      <Tag className="w-3 h-3" />
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => onDeleteTask(task.id)}
-                    className="p-1 text-slate-400 hover:text-rose-500 transition-colors cursor-pointer"
-                    title="删除"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                  <div
-                    className="text-slate-300 cursor-grab active:cursor-grabbing p-0.5"
-                    title="拖拽移动"
-                  >
-                    <GripVertical className="w-3.5 h-3.5" />
+                    <button
+                      type="button"
+                      onClick={() => openRecurrenceEditor(task)}
+                      className="p-1 text-slate-400 hover:text-purple-600 transition-colors cursor-pointer"
+                      title="设置循环规则"
+                    >
+                      <Repeat className="w-3 h-3" />
+                    </button>
+                    {!task.dueDate && (
+                      <button
+                        type="button"
+                        onClick={() => setChangingDateTaskId(task.id)}
+                        className="p-1 text-slate-400 hover:text-indigo-600 transition-colors cursor-pointer"
+                        title="设置到期时间"
+                      >
+                        <Calendar className="w-3 h-3" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => onDeleteTask(task.id)}
+                      className="p-1 text-slate-400 hover:text-rose-500 transition-colors cursor-pointer"
+                      title="删除"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                    <div
+                      className="text-slate-300 cursor-grab active:cursor-grabbing p-0.5"
+                      title="拖拽移动"
+                    >
+                      <GripVertical className="w-3 h-3" />
+                    </div>
                   </div>
                 </div>
-              </div>
-            );
-          })
+              );
+            })}
+          </div>
         )}
 
         {/* Collapsible Hidden Upcoming Recurring Tasks Drawer */}
         {hiddenRecurringTasks.length > 0 && (
-          <div className="mt-3 pt-2 border-t border-dashed border-slate-200 dark:border-slate-700">
+          <div className="mt-1.5 pt-1 border-t border-dashed border-slate-200 dark:border-slate-700">
             <button
               type="button"
               onClick={() => setShowHiddenDrawer(!showHiddenDrawer)}
-              className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl bg-purple-50/60 dark:bg-purple-950/30 border border-purple-200/50 dark:border-purple-900/40 text-purple-700 dark:text-purple-300 text-xs font-semibold hover:bg-purple-100/70 transition-colors cursor-pointer"
+              className="w-full flex items-center justify-between px-2 py-1 rounded-lg bg-purple-50/60 dark:bg-purple-950/30 border border-purple-200/50 dark:border-purple-900/40 text-purple-700 dark:text-purple-300 text-xs font-semibold hover:bg-purple-100/70 transition-colors cursor-pointer"
             >
               <div className="flex items-center space-x-1.5">
-                <Clock className="w-3.5 h-3.5" />
+                <Clock className="w-3 h-3" />
                 <span>
                   未到期周期任务（{hiddenRecurringTasks.length} 个静默隐藏中）
                 </span>
               </div>
-              <div className="flex items-center space-x-1 text-[11px] font-normal">
+              <div className="flex items-center space-x-1 text-[10px] font-normal">
                 <span>{showHiddenDrawer ? '收起' : '展开查看'}</span>
                 {showHiddenDrawer ? (
-                  <ChevronUp className="w-3.5 h-3.5" />
+                  <ChevronUp className="w-3 h-3" />
                 ) : (
-                  <ChevronDown className="w-3.5 h-3.5" />
+                  <ChevronDown className="w-3 h-3" />
                 )}
               </div>
             </button>
 
             {showHiddenDrawer && (
-              <div className="mt-2 space-y-2 p-2 rounded-xl bg-purple-50/30 dark:bg-purple-950/20 border border-purple-200/40 dark:border-purple-900/30">
+              <div className="mt-1.5 space-y-1.5 p-1.5 rounded-lg bg-purple-50/30 dark:bg-purple-950/20 border border-purple-200/40 dark:border-purple-900/30">
                 <p className="text-[10px] text-slate-500 dark:text-slate-400 px-1">
                   这些任务已按设定的规则隐藏，将在距到期日设定天数时自动浮现：
                 </p>
@@ -585,33 +1026,31 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                   return (
                     <div
                       key={task.id}
-                      className="flex items-center justify-between p-2.5 rounded-lg bg-white/90 dark:bg-slate-800/90 border border-purple-200/60 dark:border-purple-800/50 text-xs"
+                      className="flex items-center justify-between p-1.5 rounded bg-white/90 dark:bg-slate-800/90 border border-purple-200/60 dark:border-purple-800/50 text-xs"
                     >
                       <div className="min-w-0 flex-1 mr-2">
-                        <div className="flex items-center space-x-1.5">
+                        <div className="flex items-center space-x-1">
                           <span className="font-medium text-slate-800 dark:text-slate-200 truncate">
                             {task.title}
                           </span>
-                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-100 dark:bg-purple-900/70 text-purple-700 dark:text-purple-300 font-semibold">
+                          <span className="text-[9px] px-1 py-0.2 rounded bg-purple-100 dark:bg-purple-900/70 text-purple-700 dark:text-purple-300 font-semibold">
                             {getRecurrenceLabel(task.recurrence)}
                           </span>
                         </div>
-                        <div className="text-[10px] text-slate-400 dark:text-slate-400 mt-0.5">
-                          到期日: {task.dueDate} · 还有 <strong className="text-purple-600 dark:text-purple-400 font-bold">{daysUntil}</strong> 天进入显示期（提前{task.advanceDays ?? 0}天展示）
+                        <div className="text-[10px] text-slate-400 mt-0.5">
+                          到期日: {task.dueDate} · 还有 <strong className="text-purple-600 dark:text-purple-400 font-bold">{daysUntil}</strong> 天进入显示期
                         </div>
                       </div>
 
                       <div className="flex items-center space-x-1 shrink-0">
-                        {/* Quick force show */}
                         <button
                           type="button"
                           onClick={() => {
                             if (onUpdateTaskRecurrence) {
-                              // Setting advanceDays to null allows it to show immediately
                               onUpdateTaskRecurrence(task.id, task.recurrence || null, null, task.dueDate);
                             }
                           }}
-                          className="px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 transition-colors"
+                          className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100"
                           title="立刻提前展示此任务"
                         >
                           立刻展示
@@ -622,7 +1061,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                           className="p-1 text-slate-400 hover:text-purple-600"
                           title="修改规则"
                         >
-                          <Settings2 className="w-3.5 h-3.5" />
+                          <Settings2 className="w-3 h-3" />
                         </button>
                         <button
                           type="button"
@@ -630,7 +1069,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                           className="p-1 text-slate-400 hover:text-rose-500"
                           title="删除"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="w-3 h-3" />
                         </button>
                       </div>
                     </div>
@@ -642,21 +1081,19 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
         )}
       </div>
 
-      {/* Pagination Bar - shown when there are multiple pages */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between pt-1.5 pb-0.5 px-1 border-t border-slate-200/50 dark:border-slate-700/50 text-xs select-none">
-          <div className="flex items-center space-x-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+      {/* Pagination Bar - shown in list/sticker mode when multiple pages exist */}
+      {totalPages > 1 && currentViewMode !== 'folder' && (
+        <div className="flex items-center justify-between pt-1 pb-0.5 px-1 border-t border-slate-200/50 dark:border-slate-700/50 text-xs select-none shrink-0">
+          <div className="flex items-center space-x-1 text-[10px] text-slate-500 dark:text-slate-400">
             <span>
               第 <strong className="text-slate-700 dark:text-slate-200 font-semibold">{safeCurrentPage}</strong> / {totalPages} 页
             </span>
-            <span className="opacity-40">·</span>
-            <span>共 {totalVisible} 条</span>
+            <span>· 共 {totalVisible} 条</span>
           </div>
 
           <div className="flex items-center space-x-1">
-            {/* Quick page size switcher */}
-            <div className="hidden xs:flex items-center space-x-0.5 mr-1 bg-slate-100/90 dark:bg-slate-800/90 rounded-md p-0.5 text-[10px]">
-              {[5, 8, 0].map(sz => (
+            <div className="flex items-center space-x-0.5 mr-1 bg-slate-100/90 dark:bg-slate-800/90 rounded p-0.5 text-[9px]">
+              {[8, 12, 0].map(sz => (
                 <button
                   key={sz}
                   type="button"
@@ -664,7 +1101,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                     setPageSize(sz);
                     setCurrentPage(1);
                   }}
-                  className={`px-1.5 py-0.5 rounded transition-all cursor-pointer ${
+                  className={`px-1 py-0.2 rounded transition-all cursor-pointer ${
                     pageSize === sz
                       ? 'bg-white dark:bg-slate-700 font-bold text-slate-800 dark:text-slate-100 shadow-2xs'
                       : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -676,89 +1113,44 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
               ))}
             </div>
 
-            {/* Prev button */}
             <button
               type="button"
               disabled={safeCurrentPage <= 1}
               onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-              className="flex items-center space-x-0.5 px-2 py-0.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs"
-              title="上一页"
+              className="px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-[10px] disabled:opacity-30 cursor-pointer"
             >
-              <ChevronLeft className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">上一页</span>
+              <ChevronLeft className="w-3 h-3" />
             </button>
-
-            {/* Page number buttons */}
-            <div className="flex items-center space-x-0.5">
-              {Array.from({ length: totalPages }, (_, i) => i + 1).map(pageNum => {
-                if (
-                  totalPages > 5 &&
-                  pageNum !== 1 &&
-                  pageNum !== totalPages &&
-                  Math.abs(pageNum - safeCurrentPage) > 1
-                ) {
-                  if (pageNum === 2 || pageNum === totalPages - 1) {
-                    return (
-                      <span key={pageNum} className="text-[10px] text-slate-400 px-0.5">
-                        ..
-                      </span>
-                    );
-                  }
-                  return null;
-                }
-                return (
-                  <button
-                    key={pageNum}
-                    type="button"
-                    onClick={() => setCurrentPage(pageNum)}
-                    className={`w-5 h-5 rounded text-[11px] flex items-center justify-center font-medium transition-colors cursor-pointer ${
-                      safeCurrentPage === pageNum
-                        ? 'bg-indigo-600 text-white font-bold shadow-2xs'
-                        : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                    }`}
-                  >
-                    {pageNum}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Next button */}
             <button
               type="button"
               disabled={safeCurrentPage >= totalPages}
               onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-              className="flex items-center space-x-0.5 px-2 py-0.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs"
-              title="下一页"
+              className="px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-[10px] disabled:opacity-30 cursor-pointer"
             >
-              <span className="hidden sm:inline">下一页</span>
-              <ChevronRight className="w-3.5 h-3.5" />
+              <ChevronRight className="w-3 h-3" />
             </button>
           </div>
         </div>
       )}
 
-      {/* Inline Recurrence Modal / Editor for existing task */}
+      {/* Recurrence Editor Modal */}
       {editingRecurrenceTaskId && (
-        <div className="mb-2 p-3 rounded-xl bg-white dark:bg-slate-800 border-2 border-purple-400/80 shadow-lg text-xs space-y-2.5 animate-in fade-in zoom-in-95 duration-150">
+        <div className="mb-2 p-2.5 rounded-xl bg-white dark:bg-slate-800 border-2 border-purple-400/80 shadow-lg text-xs space-y-2 animate-in fade-in zoom-in-95 duration-150">
           <div className="flex items-center justify-between pb-1 border-b border-slate-100 dark:border-slate-700">
-            <span className="font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-1.5">
-              <Repeat className="w-3.5 h-3.5 text-purple-600" />
-              <span>修改循环与展示规则</span>
+            <span className="font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-1">
+              <Repeat className="w-3 h-3 text-purple-600" />
+              <span>修改循环规则</span>
             </span>
             <button
               type="button"
               onClick={() => setEditingRecurrenceTaskId(null)}
-              className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+              className="text-slate-400 hover:text-slate-600"
             >
               ✕
             </button>
           </div>
 
           <div>
-            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
-              循环频次
-            </label>
             <div className="grid grid-cols-5 gap-1">
               {RECURRENCE_OPTIONS.map(opt => (
                 <button
@@ -777,10 +1169,10 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                       setTempAdvanceDays(null);
                     }
                   }}
-                  className={`py-1 rounded text-center font-medium transition-colors cursor-pointer ${
+                  className={`py-0.5 rounded text-center text-[10px] font-medium transition-colors cursor-pointer ${
                     tempRecurrence === opt.type
-                      ? 'bg-purple-600 text-white font-bold shadow-2xs'
-                      : 'bg-slate-100 dark:bg-slate-700/60 text-slate-700 dark:text-slate-300 hover:bg-slate-200'
+                      ? 'bg-purple-600 text-white font-bold'
+                      : 'bg-slate-100 dark:bg-slate-700/60 text-slate-700 dark:text-slate-300'
                   }`}
                 >
                   {opt.label}
@@ -789,127 +1181,210 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
             </div>
           </div>
 
-          {tempRecurrence !== 'none' && (
-            <>
-              {tempRecurrence === 'weekly' ? (
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300">
-                      设置每周几重复（可点选星期几）
-                    </label>
-                    <span className="text-[10px] text-purple-600 dark:text-purple-400 font-bold bg-purple-50 dark:bg-purple-950/60 px-1.5 py-0.5 rounded">
-                      {getRecurrenceLabel('weekly', tempWeekdays)}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-7 gap-1">
-                    {WEEKDAY_OPTIONS.map(opt => {
-                      const isSelected = tempWeekdays.includes(opt.day);
-                      return (
-                        <button
-                          key={opt.day}
-                          type="button"
-                          onClick={() => toggleTempWeekday(opt.day)}
-                          className={`py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex flex-col items-center justify-center ${
-                            isSelected
-                              ? 'bg-purple-600 text-white font-bold shadow-xs ring-2 ring-purple-400/40'
-                              : 'bg-slate-100 dark:bg-slate-700/60 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
-                          }`}
-                        >
-                          <span>{opt.label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="flex items-center justify-between text-[11px] text-slate-500 pt-0.5">
-                    <span>下次执行日：<strong className="text-slate-700 dark:text-slate-200">{tempDueDate}</strong></span>
-                    <input
-                      type="date"
-                      value={tempDueDate}
-                      onChange={e => {
-                        setTempDueDate(e.target.value);
-                        try {
-                          const [y, m, d] = e.target.value.split('-').map(Number);
-                          const day = new Date(y, m - 1, d).getDay();
-                          if (!tempWeekdays.includes(day)) {
-                            setTempWeekdays([day]);
-                          }
-                        } catch {}
-                      }}
-                      className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5 text-[11px] outline-none"
-                      title="微调基准日期"
-                    />
-                  </div>
-                </div>
-              ) : (
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
-                    {tempRecurrence === 'yearly' ? '每年生日/纪念日日期' : '周期基准日期 / 生日到期日'}
-                  </label>
-                  <input
-                    type="date"
-                    value={tempDueDate}
-                    onChange={e => setTempDueDate(e.target.value)}
-                    className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1 text-xs outline-none"
-                  />
-                </div>
-              )}
-
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
-                  提前展示窗口（距离日期还有多少天时显示出来）
-                </label>
-                <div className="flex flex-wrap gap-1">
-                  {ADVANCE_DAYS_OPTIONS.map(opt => (
+          {tempRecurrence !== 'none' && tempRecurrence === 'weekly' && (
+            <div className="space-y-1">
+              <label className="text-[10px] font-semibold text-slate-600 dark:text-slate-300">
+                选择星期几重复
+              </label>
+              <div className="grid grid-cols-7 gap-1">
+                {WEEKDAY_OPTIONS.map(opt => {
+                  const isSelected = tempWeekdays.includes(opt.day);
+                  return (
                     <button
-                      key={String(opt.value)}
+                      key={opt.day}
                       type="button"
-                      onClick={() => setTempAdvanceDays(opt.value)}
-                      className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer ${
-                        tempAdvanceDays === opt.value
+                      onClick={() => toggleTempWeekday(opt.day)}
+                      className={`py-1 rounded text-[10px] font-semibold transition-all cursor-pointer ${
+                        isSelected
                           ? 'bg-purple-600 text-white font-bold'
-                          : 'bg-slate-100 dark:bg-slate-700/60 text-slate-700 dark:text-slate-300 hover:bg-slate-200'
+                          : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
                       }`}
                     >
                       {opt.label}
                     </button>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
-            </>
+            </div>
           )}
 
-          <div className="flex justify-end space-x-2 pt-1 border-t border-slate-100 dark:border-slate-700">
+          <div className="flex justify-end space-x-1.5 pt-1 border-t border-slate-100 dark:border-slate-700">
             <button
               type="button"
               onClick={() => setEditingRecurrenceTaskId(null)}
-              className="px-3 py-1 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 font-medium"
+              className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs"
             >
               取消
             </button>
             <button
               type="button"
               onClick={() => saveRecurrenceEditor(editingRecurrenceTaskId)}
-              className="px-3.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-bold shadow-xs cursor-pointer"
+              className="px-2.5 py-0.5 rounded bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold"
             >
-              保存设置
+              保存
             </button>
           </div>
         </div>
       )}
 
+      {/* Task Folder Assignment Picker Overlay */}
+      {folderPickerTaskId && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-3">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 p-4 max-w-xs w-full shadow-2xl space-y-3 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-1.5 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center space-x-1.5 text-xs font-bold text-slate-800 dark:text-slate-100">
+                <Folder className="w-4 h-4 text-amber-500" />
+                <span>选择任务所属文件夹</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFolderPickerTaskId(null)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-[11px] text-slate-500">
+              设置文件夹后，在【文件夹视图】可分类折叠，极大地节省屏幕空间：
+            </p>
+
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  if (onUpdateTaskFolder) onUpdateTaskFolder(folderPickerTaskId, null);
+                  setFolderPickerTaskId(null);
+                }}
+                className="px-2.5 py-1 rounded-lg text-xs bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200"
+              >
+                未分类 / 默认
+              </button>
+
+              {allKnownFolders.map(fName => (
+                <button
+                  key={fName}
+                  type="button"
+                  onClick={() => {
+                    if (onUpdateTaskFolder) onUpdateTaskFolder(folderPickerTaskId, fName);
+                    setFolderPickerTaskId(null);
+                  }}
+                  className="px-2.5 py-1 rounded-lg text-xs font-medium bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60 hover:bg-indigo-100 cursor-pointer"
+                >
+                  📁 {fName}
+                </button>
+              ))}
+            </div>
+
+            {/* Custom folder creation */}
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center space-x-1.5">
+              <input
+                type="text"
+                placeholder="新建文件夹名称..."
+                value={customFolderInput}
+                onChange={e => setCustomFolderInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && customFolderInput.trim()) {
+                    if (onUpdateTaskFolder) {
+                      onUpdateTaskFolder(folderPickerTaskId, customFolderInput.trim());
+                    }
+                    setCustomFolderInput('');
+                    setFolderPickerTaskId(null);
+                  }
+                }}
+                className="flex-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-xs outline-none"
+              />
+              <button
+                type="button"
+                disabled={!customFolderInput.trim()}
+                onClick={() => {
+                  if (customFolderInput.trim() && onUpdateTaskFolder) {
+                    onUpdateTaskFolder(folderPickerTaskId, customFolderInput.trim());
+                    setCustomFolderInput('');
+                    setFolderPickerTaskId(null);
+                  }
+                }}
+                className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-xs font-bold cursor-pointer"
+              >
+                设置
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New Folder Modal (for Folder View) */}
+      {showNewFolderModal && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-3">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 p-4 max-w-xs w-full shadow-2xl space-y-3">
+            <div className="flex items-center justify-between pb-1 border-b border-slate-100 dark:border-slate-800">
+              <span className="text-xs font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-1.5">
+                <FolderPlus className="w-4 h-4 text-indigo-600" />
+                <span>新建文件夹分类</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowNewFolderModal(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                ✕
+              </button>
+            </div>
+
+            <input
+              type="text"
+              autoFocus
+              placeholder="请输入分类名 (如: 幼儿园, 签证, 学习...)"
+              value={customFolderInput}
+              onChange={e => setCustomFolderInput(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && customFolderInput.trim()) {
+                  setSelectedFolder(customFolderInput.trim());
+                  setShowNewFolderModal(false);
+                  setCustomFolderInput('');
+                }
+              }}
+              className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs outline-none"
+            />
+
+            <div className="flex justify-end space-x-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowNewFolderModal(false)}
+                className="px-2.5 py-1 text-xs text-slate-500"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={!customFolderInput.trim()}
+                onClick={() => {
+                  setSelectedFolder(customFolderInput.trim());
+                  setShowNewFolderModal(false);
+                  setCustomFolderInput('');
+                }}
+                className="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-xs font-bold cursor-pointer"
+              >
+                确认创建
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Bottom Input Area with Recurrence & Due Date Controls */}
-      <div className="pt-3 mt-1">
+      <div className="pt-1.5 mt-auto shrink-0">
         {/* Recurrence & Due Date Options Panel */}
         {showOptionsPanel && (
-          <div className="mb-2 p-3 bg-white dark:bg-slate-900 border border-purple-200 dark:border-purple-900/60 rounded-xl text-xs space-y-2.5 shadow-md animate-in fade-in duration-150">
+          <div className="mb-1.5 p-2 bg-white dark:bg-slate-900 border border-purple-200 dark:border-purple-900/60 rounded-xl text-xs space-y-2 shadow-md animate-in fade-in duration-150">
             {/* Recurrence Type Selector */}
             <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="font-bold text-slate-800 dark:text-slate-200 flex items-center space-x-1">
-                  <Repeat className="w-3.5 h-3.5 text-purple-600" />
+              <div className="flex items-center justify-between mb-1">
+                <span className="font-bold text-slate-800 dark:text-slate-200 flex items-center space-x-1 text-[11px]">
+                  <Repeat className="w-3 h-3 text-purple-600" />
                   <span>循环频次</span>
                 </span>
-                <span className="text-[10px] text-slate-400">
+                <span className="text-[9px] text-slate-400">
                   {RECURRENCE_OPTIONS.find(o => o.type === selectedRecurrence)?.desc}
                 </span>
               </div>
@@ -919,7 +1394,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                     key={opt.type}
                     type="button"
                     onClick={() => handleSelectRecurrence(opt.type)}
-                    className={`py-1 rounded text-center font-medium transition-all cursor-pointer ${
+                    className={`py-0.5 rounded text-center text-[10px] font-medium transition-all cursor-pointer ${
                       selectedRecurrence === opt.type
                         ? 'bg-purple-600 text-white font-bold shadow-2xs'
                         : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
@@ -933,12 +1408,12 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
 
             {/* Weekly Weekday Selector */}
             {selectedRecurrence === 'weekly' && (
-              <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
+              <div className="pt-1.5 border-t border-slate-100 dark:border-slate-800 space-y-1">
                 <div className="flex items-center justify-between">
-                  <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                  <label className="text-[10px] font-semibold text-slate-700 dark:text-slate-300">
                     每周执行时间（选择星期几）
                   </label>
-                  <span className="text-[10px] text-purple-600 dark:text-purple-400 font-bold bg-purple-50 dark:bg-purple-950/60 px-1.5 py-0.5 rounded">
+                  <span className="text-[9px] text-purple-600 dark:text-purple-400 font-bold bg-purple-50 dark:bg-purple-950/60 px-1 py-0.2 rounded">
                     {getRecurrenceLabel('weekly', selectedWeekdays)}
                   </span>
                 </div>
@@ -950,7 +1425,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                         key={opt.day}
                         type="button"
                         onClick={() => toggleSelectedWeekday(opt.day)}
-                        className={`py-1 rounded text-xs font-semibold transition-all cursor-pointer flex flex-col items-center justify-center ${
+                        className={`py-0.5 rounded text-[10px] font-semibold transition-all cursor-pointer flex flex-col items-center justify-center ${
                           isSelected
                             ? 'bg-purple-600 text-white font-bold shadow-2xs ring-1 ring-purple-400'
                             : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
@@ -964,30 +1439,26 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
               </div>
             )}
 
-            {/* If recurring or user wants due date */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 border-t border-slate-100 dark:border-slate-800">
+            {/* Date + Advance Days */}
+            <div className="grid grid-cols-2 gap-1.5 pt-1 border-t border-slate-100 dark:border-slate-800 text-[11px]">
               <div>
-                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
-                  {selectedRecurrence === 'yearly'
-                    ? '每年生日/纪念日日期'
-                    : selectedRecurrence === 'weekly'
-                    ? '首期/下次执行日'
-                    : '截止/目标完成日'}
+                <label className="block text-[10px] font-semibold text-slate-600 dark:text-slate-300 mb-0.5">
+                  截止/目标日期
                 </label>
-                <div className="flex items-center space-x-1.5">
+                <div className="flex items-center space-x-1">
                   <input
                     type="date"
                     value={selectedDueDate}
                     onChange={e => setSelectedDueDate(e.target.value)}
-                    className="flex-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 text-xs outline-none"
+                    className="flex-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5 text-[11px] outline-none"
                   />
                   {selectedDueDate && (
                     <button
                       type="button"
                       onClick={() => setSelectedDueDate('')}
-                      className="text-[10px] text-slate-400 hover:text-slate-600"
+                      className="text-[9px] text-slate-400 hover:text-slate-600"
                     >
-                      清空
+                      清
                     </button>
                   )}
                 </div>
@@ -995,7 +1466,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
 
               {selectedRecurrence !== 'none' && (
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                  <label className="block text-[10px] font-semibold text-slate-600 dark:text-slate-300 mb-0.5">
                     提前展示窗口
                   </label>
                   <select
@@ -1004,7 +1475,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                       const val = e.target.value;
                       setSelectedAdvanceDays(val === 'null' ? null : Number(val));
                     }}
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 text-xs outline-none font-medium text-slate-700 dark:text-slate-200"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5 text-[11px] outline-none"
                   >
                     {ADVANCE_DAYS_OPTIONS.map(opt => (
                       <option key={String(opt.value)} value={String(opt.value)}>
@@ -1016,67 +1487,81 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
               )}
             </div>
 
-            {/* Helpful explanation badge based on selection */}
-            {selectedRecurrence === 'weekly' && (
-              <div className="bg-purple-50 dark:bg-purple-950/50 p-2 rounded-lg text-[11px] text-purple-700 dark:text-purple-300 flex items-center space-x-1.5">
-                <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                <span>
-                  每周任务：<strong>{getRecurrenceLabel('weekly', selectedWeekdays)}</strong> 自动循环，下次执行日：{selectedDueDate}。
-                </span>
+            {/* Folder selection for new task */}
+            <div className="pt-1 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-[10px]">
+              <span className="text-slate-500">归入文件夹：</span>
+              <div className="flex items-center space-x-1">
+                <select
+                  value={selectedFolder}
+                  onChange={e => setSelectedFolder(e.target.value)}
+                  className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5 text-[10px] outline-none"
+                >
+                  <option value="">默认待办 (无分类)</option>
+                  {allKnownFolders.map(f => (
+                    <option key={f} value={f}>
+                      📁 {f}
+                    </option>
+                  ))}
+                </select>
+                {selectedFolder && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedFolder('')}
+                    className="text-slate-400 hover:text-slate-600"
+                  >
+                    ✕
+                  </button>
+                )}
               </div>
-            )}
-            {selectedRecurrence === 'yearly' && (
-              <div className="bg-purple-50 dark:bg-purple-950/50 p-2 rounded-lg text-[11px] text-purple-700 dark:text-purple-300 flex items-center space-x-1.5">
-                <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                <span>
-                  每年生日/纪念日：距离该日期还有{' '}
-                  <strong>{selectedAdvanceDays ?? 15} 天</strong> 时自动呈现，其余时间静默隐藏。
-                </span>
-              </div>
-            )}
-            {selectedRecurrence === 'daily' && (
-              <div className="bg-purple-50 dark:bg-purple-950/50 p-2 rounded-lg text-[11px] text-purple-700 dark:text-purple-300 flex items-center space-x-1.5">
-                <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                <span>
-                  每日打卡任务：今天完成后计入今日统计，次日凌晨自动刷新恢复待办。
-                </span>
-              </div>
-            )}
+            </div>
+          </div>
+        )}
+
+        {/* Folder tag chip if selected */}
+        {selectedFolder && !showOptionsPanel && (
+          <div className="mb-1 flex items-center space-x-1 text-[10px] text-indigo-600 dark:text-indigo-400 px-1">
+            <span>将存入文件夹：</span>
+            <span className="font-bold bg-indigo-50 dark:bg-indigo-950/70 px-1.5 py-0.2 rounded border border-indigo-200/60">
+              📁 {selectedFolder}
+            </span>
+            <button
+              type="button"
+              onClick={() => setSelectedFolder('')}
+              className="text-slate-400 hover:text-slate-600"
+            >
+              ✕
+            </button>
           </div>
         )}
 
         {/* Input Bar */}
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-1.5">
           <input
             type="text"
             value={inputValue}
             onChange={e => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
-            className="flex-1 bg-white dark:bg-slate-900/90 border border-slate-200/90 dark:border-slate-700/80 rounded-xl px-3.5 py-2 text-xs sm:text-sm text-slate-800 dark:text-slate-200 placeholder-slate-400 outline-none focus:border-slate-400 focus:ring-1 focus:ring-slate-300 dark:focus:ring-slate-700 transition-all shadow-2xs"
+            className="flex-1 bg-white dark:bg-slate-900/90 border border-slate-200/90 dark:border-slate-700/80 rounded-xl px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 outline-none focus:border-indigo-500 transition-all shadow-2xs"
           />
 
           {/* Quick cycle & date config button */}
           <button
             type="button"
             onClick={() => setShowOptionsPanel(!showOptionsPanel)}
-            className={`w-9 h-9 rounded-xl border flex items-center justify-center transition-all cursor-pointer ${
-              selectedRecurrence !== 'none' || selectedDueDate
+            className={`w-7 h-7 sm:w-8 sm:h-8 rounded-xl border flex items-center justify-center transition-all cursor-pointer ${
+              selectedRecurrence !== 'none' || selectedDueDate || selectedFolder
                 ? 'bg-purple-50 dark:bg-purple-950 border-purple-300 text-purple-600 dark:text-purple-400 font-bold shadow-2xs'
                 : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-400 hover:text-purple-600 hover:border-purple-300'
             }`}
-            title={
-              selectedRecurrence !== 'none'
-                ? `已设循环: ${getRecurrenceLabel(selectedRecurrence)} (提前${selectedAdvanceDays ?? 0}天)`
-                : selectedDueDate
-                ? `已设日期: ${selectedDueDate}`
-                : '设置循环与截止日期'
-            }
+            title="设置循环、截止日期或指定文件夹"
           >
             {selectedRecurrence !== 'none' ? (
-              <Repeat className="w-4 h-4 stroke-[2.2]" />
+              <Repeat className="w-3.5 h-3.5 stroke-[2.2]" />
+            ) : selectedFolder ? (
+              <Folder className="w-3.5 h-3.5 text-indigo-600" />
             ) : (
-              <Calendar className="w-4 h-4" />
+              <Calendar className="w-3.5 h-3.5" />
             )}
           </button>
 
@@ -1084,10 +1569,10 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
           <button
             type="button"
             onClick={handleSubmit}
-            className={`w-9 h-9 rounded-xl flex items-center justify-center text-white ${buttonBg} shadow-2xs hover:opacity-90 active:scale-95 transition-all cursor-pointer shrink-0`}
+            className={`w-7 h-7 sm:w-8 sm:h-8 rounded-xl flex items-center justify-center text-white ${buttonBg} shadow-2xs hover:opacity-90 active:scale-95 transition-all cursor-pointer shrink-0`}
             title="添加任务"
           >
-            <Plus className="w-5 h-5 stroke-[2.4]" />
+            <Plus className="w-4 h-4 stroke-[2.4]" />
           </button>
         </div>
       </div>

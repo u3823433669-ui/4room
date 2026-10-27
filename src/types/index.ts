@@ -2,6 +2,8 @@ export type QuadrantId = 'q1' | 'q2' | 'q3' | 'q4';
 
 export type RecurrenceType = 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly';
 
+export type QuadrantViewMode = 'list' | 'sticker' | 'folder';
+
 export interface Task {
   id: string;
   title: string;
@@ -13,6 +15,7 @@ export interface Task {
   recurrence?: RecurrenceType | null;   // 'daily' | 'weekly' | 'monthly' | 'yearly'
   weekdays?: number[] | null;          // 0 = 周日, 1 = 周一, ..., 6 = 周六 (用于每周重复指定的星期几)
   advanceDays?: number | null;         // 提前多少天显示 (例如每年生日提前 15 天显示，默认每天为0天即当天显示)
+  folder?: string | null;              // 文件夹/分类归属 (如 "工作", "学习", "日常", "备忘", 自定义文件夹)
   recurringParentId?: string | null;   // 如果是归档的完成记录，关联母任务ID
   createdAt: number;
   updatedAt: number;

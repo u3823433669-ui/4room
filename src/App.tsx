@@ -11,8 +11,11 @@ import {
   LogOut,
   Zap,
   Sparkles,
+  List,
+  StickyNote,
+  Folder,
 } from 'lucide-react';
-import { Task, QuadrantId, AuthState, User, RecurrenceType, CountdownItem } from './types';
+import { Task, QuadrantId, AuthState, User, RecurrenceType, CountdownItem, QuadrantViewMode } from './types';
 import {
   loadLocalTasks,
   saveLocalTasks,
@@ -56,6 +59,15 @@ export default function App() {
     loadLocalCountdowns(authState.user?.username)
   );
   const [isCountdownModalOpen, setIsCountdownModalOpen] = useState<boolean>(false);
+
+  // Global view mode: 'list' | 'sticker' | 'folder'
+  const [globalViewMode, setGlobalViewMode] = useState<QuadrantViewMode>(() => {
+    return (localStorage.getItem('focus_matrix_view_mode') as QuadrantViewMode) || 'list';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('focus_matrix_view_mode', globalViewMode);
+  }, [globalViewMode]);
 
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     return localStorage.getItem('focus_matrix_theme') === 'dark';
@@ -256,14 +268,15 @@ export default function App() {
     setCountdowns(guestCountdowns);
   };
 
-  // Add task with optional due date, recurrence, advanceDays and weekdays
+  // Add task with optional due date, recurrence, advanceDays, weekdays and folder
   const handleAddTask = (
     title: string,
     quadrant: QuadrantId,
     dueDate?: string | null,
     recurrence?: RecurrenceType | null,
     advanceDays?: number | null,
-    weekdays?: number[] | null
+    weekdays?: number[] | null,
+    folder?: string | null
   ) => {
     const now = Date.now();
     const newTask: Task = {
@@ -276,11 +289,20 @@ export default function App() {
       recurrence: recurrence || null,
       weekdays: recurrence === 'weekly' ? weekdays || null : null,
       advanceDays: advanceDays !== undefined ? advanceDays : null,
+      folder: folder || null,
       createdAt: now,
       updatedAt: now,
     };
 
     updateTasks(prev => [...prev, newTask]);
+  };
+
+  // Update task folder category
+  const handleUpdateTaskFolder = (id: string, folder: string | null) => {
+    const now = Date.now();
+    updateTasks(prev =>
+      prev.map(t => (t.id === id ? { ...t, folder: folder || null, updatedAt: now } : t))
+    );
   };
 
   // Toggle complete with recurring task support
@@ -470,28 +492,71 @@ export default function App() {
     <div className="min-h-screen bg-[#f8fafc] dark:bg-[#0f172a] text-slate-800 dark:text-slate-100 flex flex-col font-sans transition-colors duration-200">
       {/* Top Header */}
       <header className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800 sticky top-0 z-20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
           {/* Left: App Logo & Title */}
-          <div className="flex items-center space-x-3 select-none">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-indigo-500 flex items-center justify-center text-white shadow-sm shadow-indigo-500/20">
-              <LayoutGrid className="w-5 h-5 stroke-[2.2]" />
+          <div className="flex items-center space-x-2.5 select-none">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-indigo-500 flex items-center justify-center text-white shadow-sm shadow-indigo-500/20">
+              <LayoutGrid className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.2]" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-indigo-600 dark:text-indigo-400 leading-none">
+              <h1 className="text-base sm:text-lg font-bold text-indigo-600 dark:text-indigo-400 leading-none">
                 Focus Matrix
               </h1>
-              <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
+              <p className="text-[10px] sm:text-xs text-slate-400 dark:text-slate-500 mt-0.5">
                 艾森豪威尔四象限时间管理
               </p>
             </div>
           </div>
 
           {/* Right: Actions */}
-          <div className="flex items-center space-x-2 sm:space-x-2.5">
-            {/* Standalone Countdown & Milestone Progress Button - Single place on home screen */}
+          <div className="flex items-center space-x-1.5 sm:space-x-2">
+            {/* View Mode Switcher: 清单 / 贴纸 / 文件夹 */}
+            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg border border-slate-200/80 dark:border-slate-700/80 text-xs shadow-2xs mr-0.5">
+              <button
+                type="button"
+                onClick={() => setGlobalViewMode('list')}
+                className={`flex items-center space-x-1 px-2 py-1 rounded-md transition-all cursor-pointer ${
+                  globalViewMode === 'list'
+                    ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 font-bold shadow-2xs'
+                    : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
+                }`}
+                title="清单视图：高密度极简紧凑列表"
+              >
+                <List className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">清单</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setGlobalViewMode('sticker')}
+                className={`flex items-center space-x-1 px-2 py-1 rounded-md transition-all cursor-pointer ${
+                  globalViewMode === 'sticker'
+                    ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 font-bold shadow-2xs'
+                    : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
+                }`}
+                title="贴纸视图：双列便签网格，一屏容纳双倍事项"
+              >
+                <StickyNote className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">贴纸</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setGlobalViewMode('folder')}
+                className={`flex items-center space-x-1 px-2 py-1 rounded-md transition-all cursor-pointer ${
+                  globalViewMode === 'folder'
+                    ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 font-bold shadow-2xs'
+                    : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
+                }`}
+                title="文件夹视图：分类折叠，海量事项一键收纳"
+              >
+                <Folder className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">文件夹</span>
+              </button>
+            </div>
+
+            {/* Standalone Countdown & Milestone Progress Button */}
             <button
               onClick={() => setIsCountdownModalOpen(true)}
-              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-amber-200 dark:border-amber-800/80 bg-amber-50/80 dark:bg-amber-950/40 text-xs font-semibold text-amber-700 dark:text-amber-300 hover:bg-amber-100/90 dark:hover:bg-amber-900/50 shadow-2xs transition-colors cursor-pointer"
+              className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border border-amber-200 dark:border-amber-800/80 bg-amber-50/80 dark:bg-amber-950/40 text-xs font-semibold text-amber-700 dark:text-amber-300 hover:bg-amber-100/90 dark:hover:bg-amber-900/50 shadow-2xs transition-colors cursor-pointer"
               title={
                 homeCountdown
                   ? `主屏倒数：${homeCountdown.item.title}（剩余 ${
@@ -508,7 +573,7 @@ export default function App() {
               <span>倒数日</span>
               {homeCountdown && (
                 <span className="hidden sm:inline-flex items-center space-x-1 px-1.5 py-0.5 text-[10px] bg-amber-200/90 dark:bg-amber-800/90 text-amber-900 dark:text-amber-100 rounded-md font-bold">
-                  <span className="truncate max-w-[80px]">{homeCountdown.item.title}:</span>
+                  <span className="truncate max-w-[70px]">{homeCountdown.item.title}:</span>
                   <span>
                     {homeCountdown.stats.daysDiff === 0
                       ? '今天'
@@ -526,7 +591,7 @@ export default function App() {
             {/* Daily Completion Chart Button */}
             <button
               onClick={() => setIsStatsModalOpen(true)}
-              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 shadow-2xs transition-colors cursor-pointer"
+              className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 shadow-2xs transition-colors cursor-pointer"
               title="查看按天完成任务图表与历史详情"
             >
               <BarChart3 className="w-3.5 h-3.5" />
@@ -536,7 +601,7 @@ export default function App() {
             {/* Hide/Show completed toggle */}
             <button
               onClick={() => setHideCompleted(!hideCompleted)}
-              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/80 shadow-2xs transition-colors cursor-pointer"
+              className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/80 shadow-2xs transition-colors cursor-pointer"
             >
               {hideCompleted ? (
                 <>
@@ -569,7 +634,7 @@ export default function App() {
               <div className="relative">
                 <button
                   onClick={() => setShowUserDropdown(!showUserDropdown)}
-                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-indigo-200 dark:border-indigo-900 bg-indigo-50/70 dark:bg-indigo-950/40 text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 shadow-2xs transition-colors cursor-pointer"
+                  className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border border-indigo-200 dark:border-indigo-900 bg-indigo-50/70 dark:bg-indigo-950/40 text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 shadow-2xs transition-colors cursor-pointer"
                 >
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                   <span>{authState.user.username}</span>
@@ -600,7 +665,7 @@ export default function App() {
             ) : (
               <button
                 onClick={() => setIsAuthModalOpen(true)}
-                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-xs transition-all cursor-pointer"
+                className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-xs transition-all cursor-pointer"
               >
                 <UserIcon className="w-3.5 h-3.5" />
                 <span>登录 / 注册</span>
@@ -612,7 +677,7 @@ export default function App() {
 
       {/* Auto-escalation floating notification toast */}
       {escalatedAlert && (
-        <div className="fixed top-20 right-6 z-40 bg-amber-500 text-white text-xs px-4 py-2.5 rounded-2xl shadow-lg flex items-center space-x-2 animate-in fade-in slide-in-from-top-2 duration-300">
+        <div className="fixed top-16 right-6 z-40 bg-amber-500 text-white text-xs px-4 py-2.5 rounded-2xl shadow-lg flex items-center space-x-2 animate-in fade-in slide-in-from-top-2 duration-300">
           <Zap className="w-4 h-4" />
           <span>{escalatedAlert}</span>
         </div>
@@ -620,15 +685,15 @@ export default function App() {
 
       {/* Recurring Task cycle completion notification toast */}
       {cycleToast && (
-        <div className="fixed top-20 right-6 z-40 bg-emerald-600 text-white text-xs px-4 py-2.5 rounded-2xl shadow-xl flex items-center space-x-2 animate-in fade-in slide-in-from-top-2 duration-300 max-w-md">
+        <div className="fixed top-16 right-6 z-40 bg-emerald-600 text-white text-xs px-4 py-2.5 rounded-2xl shadow-xl flex items-center space-x-2 animate-in fade-in slide-in-from-top-2 duration-300 max-w-md">
           <Sparkles className="w-4 h-4 flex-shrink-0 text-amber-300" />
           <span className="font-medium">{cycleToast}</span>
         </div>
       )}
 
-      {/* Main 2x2 Matrix Grid matching the screenshot */}
-      <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-5 flex-1">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+      {/* Main 2x2 Matrix Grid matching the screenshot with optimized viewport spacing */}
+      <main className="max-w-7xl w-full mx-auto px-2.5 sm:px-4 lg:px-6 py-2 sm:py-2.5 flex-1 flex flex-col justify-start">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 sm:gap-3 flex-1">
           {/* Quadrant 1: 重要且紧急 */}
           <MinimalQuadrant
             id="q1"
@@ -644,12 +709,14 @@ export default function App() {
             buttonBg="bg-[#dc2626] hover:bg-[#b91c1c]"
             tasks={tasks.filter(t => t.quadrant === 'q1')}
             hideCompleted={hideCompleted}
+            globalViewMode={globalViewMode}
             onAddTask={handleAddTask}
             onToggleTask={handleToggleTask}
             onDeleteTask={handleDeleteTask}
             onUpdateTaskTitle={handleUpdateTaskTitle}
             onUpdateTaskDueDate={handleUpdateTaskDueDate}
             onUpdateTaskRecurrence={handleUpdateTaskRecurrence}
+            onUpdateTaskFolder={handleUpdateTaskFolder}
             onDropTask={handleDropTask}
           />
 
@@ -668,12 +735,14 @@ export default function App() {
             buttonBg="bg-[#d97706] hover:bg-[#b45309]"
             tasks={tasks.filter(t => t.quadrant === 'q2')}
             hideCompleted={hideCompleted}
+            globalViewMode={globalViewMode}
             onAddTask={handleAddTask}
             onToggleTask={handleToggleTask}
             onDeleteTask={handleDeleteTask}
             onUpdateTaskTitle={handleUpdateTaskTitle}
             onUpdateTaskDueDate={handleUpdateTaskDueDate}
             onUpdateTaskRecurrence={handleUpdateTaskRecurrence}
+            onUpdateTaskFolder={handleUpdateTaskFolder}
             onDropTask={handleDropTask}
           />
 
@@ -692,12 +761,14 @@ export default function App() {
             buttonBg="bg-[#2563eb] hover:bg-[#1d4ed8]"
             tasks={tasks.filter(t => t.quadrant === 'q3')}
             hideCompleted={hideCompleted}
+            globalViewMode={globalViewMode}
             onAddTask={handleAddTask}
             onToggleTask={handleToggleTask}
             onDeleteTask={handleDeleteTask}
             onUpdateTaskTitle={handleUpdateTaskTitle}
             onUpdateTaskDueDate={handleUpdateTaskDueDate}
             onUpdateTaskRecurrence={handleUpdateTaskRecurrence}
+            onUpdateTaskFolder={handleUpdateTaskFolder}
             onDropTask={handleDropTask}
           />
 
@@ -716,12 +787,14 @@ export default function App() {
             buttonBg="bg-[#475569] hover:bg-[#334155]"
             tasks={tasks.filter(t => t.quadrant === 'q4')}
             hideCompleted={hideCompleted}
+            globalViewMode={globalViewMode}
             onAddTask={handleAddTask}
             onToggleTask={handleToggleTask}
             onDeleteTask={handleDeleteTask}
             onUpdateTaskTitle={handleUpdateTaskTitle}
             onUpdateTaskDueDate={handleUpdateTaskDueDate}
             onUpdateTaskRecurrence={handleUpdateTaskRecurrence}
+            onUpdateTaskFolder={handleUpdateTaskFolder}
             onDropTask={handleDropTask}
           />
         </div>
