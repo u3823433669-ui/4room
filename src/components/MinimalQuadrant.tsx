@@ -19,6 +19,7 @@ import {
   FolderOpen,
   FolderPlus,
   Tag,
+  Bell,
 } from 'lucide-react';
 import { QuadrantId, Task, RecurrenceType, QuadrantViewMode } from '../types';
 import { sound } from '../utils/sound';
@@ -79,15 +80,18 @@ const RECURRENCE_OPTIONS: { type: RecurrenceType; label: string; desc: string }[
   { type: 'yearly', label: '每年', desc: '每年纪念日/生日，可设置提前15天显示' },
 ];
 
-const ADVANCE_DAYS_OPTIONS = [
-  { value: 0, label: '当天才显示' },
-  { value: 1, label: '提前 1 天' },
-  { value: 3, label: '提前 3 天' },
-  { value: 7, label: '提前 7 天' },
-  { value: 15, label: '提前 15 天 (生日推荐)' },
-  { value: 30, label: '提前 30 天' },
-  { value: null, label: '始终显示 (不隐藏)' },
+const REMINDER_OPTIONS = [
+  { value: 0, label: '🔔 当天提醒 (到期当天)', shortLabel: '当天提醒' },
+  { value: 1, label: '🔔 提前 1 天提醒', shortLabel: '提前1天' },
+  { value: 2, label: '🔔 提前 2 天提醒', shortLabel: '提前2天' },
+  { value: 3, label: '🔔 提前 3 天提醒', shortLabel: '提前3天' },
+  { value: 7, label: '🔔 提前 7 天提醒', shortLabel: '提前7天' },
+  { value: 15, label: '🔔 提前 15 天提醒', shortLabel: '提前15天' },
+  { value: 30, label: '🔔 提前 30 天提醒', shortLabel: '提前30天' },
+  { value: null, label: '仅到期显示 (不设提前提醒)', shortLabel: '不提前' },
 ];
+
+const ADVANCE_DAYS_OPTIONS = REMINDER_OPTIONS;
 
 const DEFAULT_FOLDERS = ['工作', '学习', '日常', '备忘'];
 
@@ -315,11 +319,34 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
     setEditingTaskId(null);
   };
 
-  const openRecurrenceEditor = (task: Task) => {
+  const isTaskInActiveReminder = (task: Task) => {
+    if (task.completed || !task.dueDate || task.advanceDays === null || task.advanceDays === undefined) {
+      return false;
+    }
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const [y, m, d] = task.dueDate.split('-').map(Number);
+      const dueDay = new Date(y, m - 1, d);
+      dueDay.setHours(0, 0, 0, 0);
+      const diffDays = Math.round((dueDay.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+      return diffDays <= task.advanceDays && diffDays >= 0;
+    } catch {
+      return false;
+    }
+  };
+
+  const openReminderEditor = (task: Task) => {
     setEditingRecurrenceTaskId(task.id);
     const rec = task.recurrence || 'none';
     setTempRecurrence(rec);
-    setTempAdvanceDays(task.advanceDays ?? getDefaultAdvanceDays(task.recurrence));
+    const defAdvance =
+      task.advanceDays !== undefined && task.advanceDays !== null
+        ? task.advanceDays
+        : task.dueDate
+        ? 0
+        : getDefaultAdvanceDays(task.recurrence);
+    setTempAdvanceDays(defAdvance);
     setTempDueDate(task.dueDate || new Date().toISOString().split('T')[0]);
 
     if (task.weekdays && task.weekdays.length > 0) {
@@ -336,6 +363,8 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
       setTempWeekdays([new Date().getDay()]);
     }
   };
+
+  const openRecurrenceEditor = openReminderEditor;
 
   const toggleTempWeekday = (day: number) => {
     let next: number[];
@@ -544,6 +573,16 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                       </button>
                     )}
 
+                    {/* Reminder bell button */}
+                    <button
+                      type="button"
+                      onClick={() => openReminderEditor(task)}
+                      className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-amber-600 transition-opacity p-0.5 cursor-pointer"
+                      title="更改提醒时间与日期"
+                    >
+                      <Bell className="w-3 h-3" />
+                    </button>
+
                     {/* Delete button */}
                     <button
                       type="button"
@@ -587,22 +626,39 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                   <div className="flex flex-wrap items-center gap-1 pt-1 mt-auto border-t border-slate-200/40 dark:border-slate-700/40">
                     {isRecurring && (
                       <span
-                        onClick={() => openRecurrenceEditor(task)}
+                        onClick={() => openReminderEditor(task)}
                         className="inline-flex items-center space-x-0.5 text-[9px] px-1 py-0.2 rounded bg-purple-100/90 dark:bg-purple-900/60 text-purple-700 dark:text-purple-300 font-semibold cursor-pointer"
-                        title="循环任务"
+                        title="点击更改循环与提醒规则"
                       >
                         <Repeat className="w-2.5 h-2.5" />
                         <span>{getRecurrenceLabel(task.recurrence, task.weekdays)}</span>
                       </span>
                     )}
 
+                    {task.advanceDays !== null && task.advanceDays !== undefined && (
+                      <span
+                        onClick={() => openReminderEditor(task)}
+                        className={`inline-flex items-center space-x-0.5 text-[9px] px-1 py-0.2 rounded font-medium cursor-pointer transition-colors ${
+                          isTaskInActiveReminder(task)
+                            ? 'bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700'
+                            : 'bg-amber-50/90 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 hover:bg-amber-100'
+                        }`}
+                        title="点击更改提醒时间"
+                      >
+                        <Bell className="w-2.5 h-2.5 text-amber-600" />
+                        <span>{task.advanceDays === 0 ? '当天提醒' : `提前${task.advanceDays}天`}</span>
+                      </span>
+                    )}
+
                     {shouldShowDueBadge && (
                       <span
-                        className={`inline-flex items-center space-x-0.5 text-[9px] px-1 py-0.2 rounded font-medium ${
+                        onClick={() => openReminderEditor(task)}
+                        className={`inline-flex items-center space-x-0.5 text-[9px] px-1 py-0.2 rounded font-medium cursor-pointer ${
                           dueStatus.isOverdue
                             ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/80 dark:text-rose-300'
-                            : 'bg-slate-100 text-slate-600 dark:bg-slate-700/70 dark:text-slate-300'
+                            : 'bg-slate-100 text-slate-600 dark:bg-slate-700/70 dark:text-slate-300 hover:bg-slate-200'
                         }`}
+                        title="点击更改提醒与截止时间"
                       >
                         <Calendar className="w-2.5 h-2.5" />
                         <span>{dueStatus.text}</span>
@@ -746,19 +802,52 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                               </span>
 
                               {isRecurring && (
-                                <span className="text-[9px] px-1 py-0.2 rounded bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300">
+                                <button
+                                  type="button"
+                                  onClick={() => openReminderEditor(task)}
+                                  className="text-[9px] px-1 py-0.2 rounded bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 font-semibold cursor-pointer"
+                                  title="点击更改循环规则"
+                                >
                                   {getRecurrenceLabel(task.recurrence)}
-                                </span>
+                                </button>
+                              )}
+
+                              {task.advanceDays !== null && task.advanceDays !== undefined && (
+                                <button
+                                  type="button"
+                                  onClick={() => openReminderEditor(task)}
+                                  className={`text-[9px] px-1 py-0.2 rounded font-medium cursor-pointer transition-colors ${
+                                    isTaskInActiveReminder(task)
+                                      ? 'bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-200 border border-amber-300'
+                                      : 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 hover:bg-amber-100'
+                                  }`}
+                                  title="点击更改提醒时间"
+                                >
+                                  🔔 {task.advanceDays === 0 ? '当天提醒' : `提前${task.advanceDays}天`}
+                                </button>
                               )}
 
                               {task.dueDate && (
-                                <span className="text-[9px] px-1 py-0.2 rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
+                                <button
+                                  type="button"
+                                  onClick={() => openReminderEditor(task)}
+                                  className="text-[9px] px-1 py-0.2 rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 cursor-pointer"
+                                  title="点击修改提醒与到期时间"
+                                >
                                   {dueStatus.text}
-                                </span>
+                                </button>
                               )}
                             </div>
 
                             <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                type="button"
+                                onClick={() => openReminderEditor(task)}
+                                className="p-0.5 text-slate-400 hover:text-amber-600 cursor-pointer"
+                                title="更改提醒时间与日期"
+                              >
+                                <Bell className="w-3 h-3" />
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => setFolderPickerTaskId(task.id)}
@@ -873,30 +962,37 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                       {isRecurring && (
                         <button
                           type="button"
-                          onClick={() => openRecurrenceEditor(task)}
+                          onClick={() => openReminderEditor(task)}
                           className="inline-flex items-center space-x-0.5 text-[9px] px-1.5 py-0.2 rounded font-semibold bg-purple-50 text-purple-700 dark:bg-purple-950/70 dark:text-purple-300 border border-purple-200/80 dark:border-purple-800/60 hover:bg-purple-100 transition-colors cursor-pointer"
-                          title="点击修改循环周期及提前展示规则"
+                          title="点击修改循环周期及提醒规则"
                         >
                           <Repeat className="w-2.5 h-2.5" />
-                          <span>
-                            {getRecurrenceLabel(task.recurrence, task.weekdays)}
-                            {task.advanceDays !== null && task.advanceDays !== undefined
-                              ? task.advanceDays === 0
-                                ? '·当天'
-                                : `·提前${task.advanceDays}天`
-                              : ''}
-                          </span>
+                          <span>{getRecurrenceLabel(task.recurrence, task.weekdays)}</span>
+                        </button>
+                      )}
+
+                      {/* Reminder Badge */}
+                      {task.advanceDays !== null && task.advanceDays !== undefined && (
+                        <button
+                          type="button"
+                          onClick={() => openReminderEditor(task)}
+                          className={`inline-flex items-center space-x-0.5 text-[9px] px-1.5 py-0.2 rounded font-medium transition-colors cursor-pointer ${
+                            isTaskInActiveReminder(task)
+                              ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-200 border border-amber-300 dark:border-amber-700'
+                              : 'bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300 border border-amber-200/70 hover:bg-amber-100'
+                          }`}
+                          title="点击更改提醒时间"
+                        >
+                          <Bell className="w-2.5 h-2.5 text-amber-600 dark:text-amber-400" />
+                          <span>{task.advanceDays === 0 ? '当天提醒' : `提前${task.advanceDays}天`}</span>
                         </button>
                       )}
 
                       {/* Due Date & Auto-escalation Badge */}
                       {shouldShowDueBadge && (
-                        <span
-                          onClick={() =>
-                            setChangingDateTaskId(
-                              changingDateTaskId === task.id ? null : task.id
-                            )
-                          }
+                        <button
+                          type="button"
+                          onClick={() => openReminderEditor(task)}
                           className={`inline-flex items-center space-x-1 text-[9px] px-1.5 py-0.2 rounded font-medium cursor-pointer transition-colors ${
                             dueStatus.isOverdue
                               ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/70 dark:text-rose-300 animate-pulse'
@@ -904,7 +1000,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                               ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300'
                               : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300 hover:bg-slate-200'
                           }`}
-                          title="点击修改或清除截止时间"
+                          title="点击修改截止日期或提醒时间"
                         >
                           <Calendar className="w-2.5 h-2.5" />
                           <span>{dueStatus.text}</span>
@@ -913,38 +1009,21 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                               (临期转入)
                             </span>
                           )}
-                        </span>
-                      )}
-
-                      {/* Date picker edit overlay */}
-                      {changingDateTaskId === task.id && (
-                        <div className="flex items-center space-x-1 bg-white dark:bg-slate-900 p-0.5 rounded border border-slate-300 shadow-sm text-xs">
-                          <input
-                            type="date"
-                            defaultValue={task.dueDate || ''}
-                            onChange={e => {
-                              onUpdateTaskDueDate(task.id, e.target.value || null);
-                              setChangingDateTaskId(null);
-                            }}
-                            className="bg-transparent text-slate-700 dark:text-slate-200 text-xs outline-none"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => {
-                              onUpdateTaskDueDate(task.id, null);
-                              setChangingDateTaskId(null);
-                            }}
-                            className="text-[10px] text-slate-400 hover:text-rose-500 px-1 cursor-pointer"
-                          >
-                            清除
-                          </button>
-                        </div>
+                        </button>
                       )}
                     </div>
                   </div>
 
-                  {/* Hover actions: Folder + Recurrence + Date + Delete + Drag */}
+                  {/* Hover actions: Reminder + Folder + Recurrence + Delete + Drag */}
                   <div className="flex items-center space-x-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      type="button"
+                      onClick={() => openReminderEditor(task)}
+                      className="p-1 text-slate-400 hover:text-amber-600 transition-colors cursor-pointer"
+                      title="更改提醒时间与日期"
+                    >
+                      <Bell className="w-3 h-3" />
+                    </button>
                     <button
                       type="button"
                       onClick={() => setFolderPickerTaskId(task.id)}
@@ -955,7 +1034,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => openRecurrenceEditor(task)}
+                      onClick={() => openReminderEditor(task)}
                       className="p-1 text-slate-400 hover:text-purple-600 transition-colors cursor-pointer"
                       title="设置循环规则"
                     >
@@ -1133,71 +1212,122 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
         </div>
       )}
 
-      {/* Recurrence Editor Modal */}
+      {/* Reminder & Recurrence & Due Date Settings Modal */}
       {editingRecurrenceTaskId && (
-        <div className="mb-2 p-2.5 rounded-xl bg-white dark:bg-slate-800 border-2 border-purple-400/80 shadow-lg text-xs space-y-2 animate-in fade-in zoom-in-95 duration-150">
-          <div className="flex items-center justify-between pb-1 border-b border-slate-100 dark:border-slate-700">
-            <span className="font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-1">
-              <Repeat className="w-3 h-3 text-purple-600" />
-              <span>修改循环规则</span>
-            </span>
-            <button
-              type="button"
-              onClick={() => setEditingRecurrenceTaskId(null)}
-              className="text-slate-400 hover:text-slate-600"
-            >
-              ✕
-            </button>
-          </div>
-
-          <div>
-            <div className="grid grid-cols-5 gap-1">
-              {RECURRENCE_OPTIONS.map(opt => (
-                <button
-                  key={opt.type}
-                  type="button"
-                  onClick={() => {
-                    setTempRecurrence(opt.type);
-                    if (opt.type !== 'none') {
-                      setTempAdvanceDays(getDefaultAdvanceDays(opt.type));
-                      if (opt.type === 'weekly') {
-                        const initialDays = tempWeekdays.length > 0 ? tempWeekdays : [new Date().getDay()];
-                        setTempWeekdays(initialDays);
-                        setTempDueDate(getNextOccurrenceForWeekdays(initialDays));
-                      }
-                    } else {
-                      setTempAdvanceDays(null);
-                    }
-                  }}
-                  className={`py-0.5 rounded text-center text-[10px] font-medium transition-colors cursor-pointer ${
-                    tempRecurrence === opt.type
-                      ? 'bg-purple-600 text-white font-bold'
-                      : 'bg-slate-100 dark:bg-slate-700/60 text-slate-700 dark:text-slate-300'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
+        <div className="fixed inset-0 z-50 bg-black/45 backdrop-blur-xs flex items-center justify-center p-3 animate-in fade-in duration-150">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 p-4 max-w-sm w-full shadow-2xl space-y-3.5 animate-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center space-x-2">
+                <div className="w-7 h-7 rounded-lg bg-amber-50 dark:bg-amber-950/70 border border-amber-200 dark:border-amber-800 flex items-center justify-center">
+                  <Bell className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div>
+                  <h4 className="text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-100">
+                    更改提醒与截止时间
+                  </h4>
+                  <p className="text-[10px] text-slate-400 truncate max-w-[210px]">
+                    {tasks.find(t => t.id === editingRecurrenceTaskId)?.title}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingRecurrenceTaskId(null)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer p-1"
+              >
+                ✕
+              </button>
             </div>
-          </div>
 
-          {tempRecurrence !== 'none' && tempRecurrence === 'weekly' && (
+            {/* Due Date Section */}
             <div className="space-y-1">
-              <label className="text-[10px] font-semibold text-slate-600 dark:text-slate-300">
-                选择星期几重复
-              </label>
-              <div className="grid grid-cols-7 gap-1">
-                {WEEKDAY_OPTIONS.map(opt => {
-                  const isSelected = tempWeekdays.includes(opt.day);
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 flex items-center space-x-1">
+                  <Calendar className="w-3.5 h-3.5 text-indigo-500" />
+                  <span>截止 / 目标日期</span>
+                </label>
+                <div className="flex items-center space-x-1 text-[10px]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const todayStr = new Date().toISOString().split('T')[0];
+                      setTempDueDate(todayStr);
+                    }}
+                    className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 cursor-pointer"
+                  >
+                    今天
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const tom = new Date();
+                      tom.setDate(tom.getDate() + 1);
+                      setTempDueDate(tom.toISOString().split('T')[0]);
+                    }}
+                    className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 cursor-pointer"
+                  >
+                    明天
+                  </button>
+                  {tempDueDate && (
+                    <button
+                      type="button"
+                      onClick={() => setTempDueDate('')}
+                      className="text-rose-500 hover:underline cursor-pointer"
+                    >
+                      清除
+                    </button>
+                  )}
+                </div>
+              </div>
+              <input
+                type="date"
+                value={tempDueDate}
+                onChange={e => setTempDueDate(e.target.value)}
+                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs outline-none focus:border-amber-500"
+              />
+            </div>
+
+            {/* Reminder Timing Section (User's core request) */}
+            <div className="space-y-1.5 pt-1 border-t border-slate-100 dark:border-slate-800">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-bold text-slate-800 dark:text-slate-200 flex items-center space-x-1">
+                  <Bell className="w-3.5 h-3.5 text-amber-500" />
+                  <span>提醒时间设置</span>
+                </label>
+                <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/60 px-1.5 py-0.2 rounded border border-amber-200/50">
+                  {tempAdvanceDays === 0
+                    ? '🔔 当天提醒'
+                    : tempAdvanceDays === 1
+                    ? '🔔 提前 1 天提醒'
+                    : tempAdvanceDays !== null
+                    ? `🔔 提前 ${tempAdvanceDays} 天提醒`
+                    : '仅到期显示 (不设提前提醒)'}
+                </span>
+              </div>
+
+              {/* Quick reminder choice pills */}
+              <div className="grid grid-cols-4 gap-1">
+                {[
+                  { value: 0, label: '当天提醒' },
+                  { value: 1, label: '提前 1 天' },
+                  { value: 2, label: '提前 2 天' },
+                  { value: 3, label: '提前 3 天' },
+                  { value: 7, label: '提前 7 天' },
+                  { value: 15, label: '提前 15 天' },
+                  { value: 30, label: '提前 30 天' },
+                  { value: null, label: '不提前' },
+                ].map(opt => {
+                  const isSelected = tempAdvanceDays === opt.value;
                   return (
                     <button
-                      key={opt.day}
+                      key={String(opt.value)}
                       type="button"
-                      onClick={() => toggleTempWeekday(opt.day)}
-                      className={`py-1 rounded text-[10px] font-semibold transition-all cursor-pointer ${
+                      onClick={() => setTempAdvanceDays(opt.value)}
+                      className={`py-1 rounded-lg text-center text-[10px] font-medium transition-all cursor-pointer ${
                         isSelected
-                          ? 'bg-purple-600 text-white font-bold'
-                          : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                          ? 'bg-amber-500 text-white font-bold shadow-2xs ring-1 ring-amber-400'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
                       }`}
                     >
                       {opt.label}
@@ -1205,24 +1335,90 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                   );
                 })}
               </div>
+              <p className="text-[10px] text-slate-400 leading-tight">
+                {tempAdvanceDays === 0
+                  ? '提示：当天提醒仅在到期日当天展示并触发到期提醒。'
+                  : tempAdvanceDays === 1
+                  ? '提示：提前1天提醒将在到期日前1天开始在象限中突出显示。'
+                  : tempAdvanceDays !== null
+                  ? `提示：将在到期日前 ${tempAdvanceDays} 天开始在象限中突出显示。`
+                  : '提示：不设提前提醒，事项将仅按常规截止日期显示。'}
+              </p>
             </div>
-          )}
 
-          <div className="flex justify-end space-x-1.5 pt-1 border-t border-slate-100 dark:border-slate-700">
-            <button
-              type="button"
-              onClick={() => setEditingRecurrenceTaskId(null)}
-              className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs"
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              onClick={() => saveRecurrenceEditor(editingRecurrenceTaskId)}
-              className="px-2.5 py-0.5 rounded bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold"
-            >
-              保存
-            </button>
+            {/* Recurrence Cycle Section */}
+            <div className="space-y-1.5 pt-1 border-t border-slate-100 dark:border-slate-800">
+              <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 flex items-center space-x-1">
+                <Repeat className="w-3.5 h-3.5 text-purple-600" />
+                <span>循环频次（可选）</span>
+              </label>
+              <div className="grid grid-cols-5 gap-1">
+                {RECURRENCE_OPTIONS.map(opt => (
+                  <button
+                    key={opt.type}
+                    type="button"
+                    onClick={() => {
+                      setTempRecurrence(opt.type);
+                      if (opt.type === 'weekly' && tempWeekdays.length === 0) {
+                        setTempWeekdays([new Date().getDay()]);
+                      }
+                    }}
+                    className={`py-1 rounded-lg text-center text-[10px] font-medium transition-all cursor-pointer ${
+                      tempRecurrence === opt.type
+                        ? 'bg-purple-600 text-white font-bold shadow-2xs'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Weekly weekday picker */}
+              {tempRecurrence === 'weekly' && (
+                <div className="pt-1 space-y-1">
+                  <span className="text-[10px] text-slate-500">选择每周提醒的星期几：</span>
+                  <div className="grid grid-cols-7 gap-1">
+                    {WEEKDAY_OPTIONS.map(opt => {
+                      const isSelected = tempWeekdays.includes(opt.day);
+                      return (
+                        <button
+                          key={opt.day}
+                          type="button"
+                          onClick={() => toggleTempWeekday(opt.day)}
+                          className={`py-1 rounded text-[10px] font-semibold transition-all cursor-pointer ${
+                            isSelected
+                              ? 'bg-purple-600 text-white font-bold'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setEditingRecurrenceTaskId(null)}
+                className="px-3 py-1.5 rounded-lg text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => saveRecurrenceEditor(editingRecurrenceTaskId)}
+                className="px-4 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold shadow-2xs cursor-pointer flex items-center space-x-1"
+              >
+                <Bell className="w-3.5 h-3.5" />
+                <span>保存提醒设置</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1439,50 +1635,123 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
               </div>
             )}
 
-            {/* Date + Advance Days */}
-            <div className="grid grid-cols-2 gap-1.5 pt-1 border-t border-slate-100 dark:border-slate-800 text-[11px]">
+            {/* Date + Reminder Days Controls */}
+            <div className="pt-1.5 border-t border-slate-100 dark:border-slate-800 space-y-1.5 text-[11px]">
               <div>
-                <label className="block text-[10px] font-semibold text-slate-600 dark:text-slate-300 mb-0.5">
-                  截止/目标日期
-                </label>
-                <div className="flex items-center space-x-1">
-                  <input
-                    type="date"
-                    value={selectedDueDate}
-                    onChange={e => setSelectedDueDate(e.target.value)}
-                    className="flex-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5 text-[11px] outline-none"
-                  />
-                  {selectedDueDate && (
+                <div className="flex items-center justify-between mb-0.5">
+                  <label className="text-[10px] font-semibold text-slate-600 dark:text-slate-300 flex items-center space-x-1">
+                    <Calendar className="w-3 h-3 text-indigo-500" />
+                    <span>截止/目标日期</span>
+                  </label>
+                  <div className="flex items-center space-x-1">
                     <button
                       type="button"
-                      onClick={() => setSelectedDueDate('')}
-                      className="text-[9px] text-slate-400 hover:text-slate-600"
+                      onClick={() => {
+                        const todayStr = new Date().toISOString().split('T')[0];
+                        setSelectedDueDate(todayStr);
+                        if (selectedAdvanceDays === null) setSelectedAdvanceDays(0);
+                      }}
+                      className="px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 text-[9px] cursor-pointer"
                     >
-                      清
+                      今天
                     </button>
-                  )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const tom = new Date();
+                        tom.setDate(tom.getDate() + 1);
+                        setSelectedDueDate(tom.toISOString().split('T')[0]);
+                        if (selectedAdvanceDays === null) setSelectedAdvanceDays(1);
+                      }}
+                      className="px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 text-[9px] cursor-pointer"
+                    >
+                      明天
+                    </button>
+                    {selectedDueDate && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedDueDate('');
+                          setSelectedAdvanceDays(null);
+                        }}
+                        className="text-[9px] text-rose-500 hover:underline cursor-pointer"
+                      >
+                        清除
+                      </button>
+                    )}
+                  </div>
                 </div>
+
+                <input
+                  type="date"
+                  value={selectedDueDate}
+                  onChange={e => {
+                    setSelectedDueDate(e.target.value);
+                    if (e.target.value && selectedAdvanceDays === null) {
+                      setSelectedAdvanceDays(0);
+                    }
+                  }}
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 text-xs outline-none"
+                />
               </div>
 
-              {selectedRecurrence !== 'none' && (
-                <div>
-                  <label className="block text-[10px] font-semibold text-slate-600 dark:text-slate-300 mb-0.5">
-                    提前展示窗口
-                  </label>
-                  <select
-                    value={selectedAdvanceDays === null ? 'null' : selectedAdvanceDays}
-                    onChange={e => {
-                      const val = e.target.value;
-                      setSelectedAdvanceDays(val === 'null' ? null : Number(val));
-                    }}
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5 text-[11px] outline-none"
-                  >
-                    {ADVANCE_DAYS_OPTIONS.map(opt => (
-                      <option key={String(opt.value)} value={String(opt.value)}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
+              {/* 提醒时间设置 (只要有截止日期或设定了循环，都可以选择提醒时间，比如当天提醒或提前1天提醒) */}
+              {(selectedDueDate || selectedRecurrence !== 'none') && (
+                <div className="space-y-1 pt-1 border-t border-slate-100/70 dark:border-slate-800/70">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] font-semibold text-slate-700 dark:text-slate-300 flex items-center space-x-1">
+                      <Bell className="w-3 h-3 text-amber-500" />
+                      <span>提醒时间</span>
+                    </label>
+                    <span className="text-[9px] font-bold text-amber-600 dark:text-amber-400">
+                      {selectedAdvanceDays === 0
+                        ? '当天提醒'
+                        : selectedAdvanceDays === 1
+                        ? '提前 1 天提醒'
+                        : selectedAdvanceDays !== null
+                        ? `提前 ${selectedAdvanceDays} 天提醒`
+                        : '仅到期显示'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center space-x-1">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedAdvanceDays(0)}
+                      className={`flex-1 py-1 rounded text-center text-[10px] font-medium transition-all cursor-pointer ${
+                        selectedAdvanceDays === 0
+                          ? 'bg-amber-500 text-white font-bold shadow-2xs'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
+                      }`}
+                    >
+                      当天提醒
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedAdvanceDays(1)}
+                      className={`flex-1 py-1 rounded text-center text-[10px] font-medium transition-all cursor-pointer ${
+                        selectedAdvanceDays === 1
+                          ? 'bg-amber-500 text-white font-bold shadow-2xs'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
+                      }`}
+                    >
+                      提前 1 天
+                    </button>
+                    <select
+                      value={selectedAdvanceDays === null ? 'null' : selectedAdvanceDays}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setSelectedAdvanceDays(val === 'null' ? null : Number(val));
+                      }}
+                      className="flex-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-1 text-[10px] outline-none"
+                    >
+                      {REMINDER_OPTIONS.map(opt => (
+                        <option key={String(opt.value)} value={String(opt.value)}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               )}
             </div>

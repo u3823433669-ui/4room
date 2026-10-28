@@ -14,6 +14,7 @@ import {
   List,
   StickyNote,
   Folder,
+  Bell,
 } from 'lucide-react';
 import { Task, QuadrantId, AuthState, User, RecurrenceType, CountdownItem, QuadrantViewMode } from './types';
 import {
@@ -488,6 +489,28 @@ export default function App() {
     return upcoming[0] || { item: countdowns[0], stats: calculateCountdownStats(countdowns[0]) };
   }, [countdowns]);
 
+  const [dismissedReminderBanner, setDismissedReminderBanner] = useState(false);
+
+  // Active reminder tasks: tasks where reminder is set and today has reached the reminder window
+  const activeReminderTasks = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    return tasks.filter(t => {
+      if (t.completed || !t.dueDate) return false;
+      if (t.advanceDays === null || t.advanceDays === undefined) return false;
+      try {
+        const [y, m, d] = t.dueDate.split('-').map(Number);
+        const dueDay = new Date(y, m - 1, d);
+        dueDay.setHours(0, 0, 0, 0);
+        const diffDays = Math.round((dueDay.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        return diffDays <= t.advanceDays && diffDays >= 0;
+      } catch {
+        return false;
+      }
+    });
+  }, [tasks]);
+
   return (
     <div className="min-h-screen bg-[#f8fafc] dark:bg-[#0f172a] text-slate-800 dark:text-slate-100 flex flex-col font-sans transition-colors duration-200">
       {/* Top Header */}
@@ -674,6 +697,33 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {/* Active reminders banner if any tasks are currently in their reminder window */}
+      {activeReminderTasks.length > 0 && !dismissedReminderBanner && (
+        <div className="bg-amber-50 dark:bg-amber-950/60 border-b border-amber-200/90 dark:border-amber-900/60 text-amber-900 dark:text-amber-200 px-3 py-1.5 text-xs shadow-2xs animate-in fade-in duration-200">
+          <div className="max-w-7xl mx-auto flex items-center justify-between">
+            <div className="flex items-center space-x-2 truncate min-w-0 mr-2">
+              <span className="flex items-center justify-center w-5 h-5 rounded-full bg-amber-500 text-white shrink-0 shadow-2xs">
+                <Bell className="w-3 h-3" />
+              </span>
+              <span className="font-bold shrink-0">到期提醒：</span>
+              <span className="truncate">
+                今日有 <strong className="text-amber-700 dark:text-amber-300 font-bold">{activeReminderTasks.length}</strong> 个事项到达提醒时间（
+                {activeReminderTasks.slice(0, 3).map(t => `【${t.title}】`).join('、')}
+                {activeReminderTasks.length > 3 ? ' 等' : ''}）
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setDismissedReminderBanner(true)}
+              className="text-amber-600 dark:text-amber-400 hover:text-amber-800 text-[11px] font-bold cursor-pointer shrink-0 px-1 py-0.5 rounded hover:bg-amber-100 dark:hover:bg-amber-900/40"
+              title="关闭提醒条"
+            >
+              知道了 ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Auto-escalation floating notification toast */}
       {escalatedAlert && (
