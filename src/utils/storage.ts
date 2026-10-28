@@ -1,4 +1,4 @@
-import { Task, User, AuthState, CountdownItem } from '../types';
+import { Task, User, AuthState, CountdownItem, SaveSlot } from '../types';
 import { INITIAL_DEMO_TASKS } from './constants';
 import { checkAndEscalateTasks } from './escalation';
 import { INITIAL_DEMO_COUNTDOWNS } from './countdown';
@@ -171,19 +171,18 @@ export function getLocalSnapshots(): TaskSnapshotItem[] {
   return [];
 }
 
+// User requirement: 历史回滚时间间隔长，12小时记录一次足够了
+const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
+
 export function saveLocalSnapshot(tasks: Task[]): void {
   if (!tasks || tasks.length === 0) return;
   try {
     const existing = getLocalSnapshots();
-    // Avoid duplicate snapshot if nothing changed within 30 seconds
+    // Enforce 12-hour minimum interval between automatic snapshots
     if (existing.length > 0) {
       const last = existing[0];
-      if (
-        Date.now() - last.timestamp < 30000 &&
-        last.taskCount === tasks.length &&
-        JSON.stringify(last.previewTitles) === JSON.stringify(tasks.slice(0, 4).map(t => t.title))
-      ) {
-        return;
+      if (Date.now() - last.timestamp < TWELVE_HOURS_MS) {
+        return; // 12小时记录一次足够了
       }
     }
 
@@ -195,11 +194,178 @@ export function saveLocalSnapshot(tasks: Task[]): void {
       tasks: [...tasks],
     };
 
-    const updated = [newSnapshot, ...existing].slice(0, 20); // keep last 20 local snapshots
+    const updated = [newSnapshot, ...existing].slice(0, 30); // keep last 30 snapshots
     localStorage.setItem(SNAPSHOTS_KEY, JSON.stringify(updated));
   } catch (err) {
     console.warn('[Storage] Error saving local snapshot:', err);
   }
+}
+
+// ==========================================
+// Save Slots Utilities (游戏式存档 1, 存档 2, 存档 3...)
+// ==========================================
+
+const SLOTS_KEY = 'focus_matrix_save_slots';
+export const TOTAL_SAVE_SLOTS = 5;
+
+export function getLocalSaveSlots(username?: string): SaveSlot[] {
+  const key = username ? `${SLOTS_KEY}_${username}` : SLOTS_KEY;
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length === TOTAL_SAVE_SLOTS) {
+        return parsed;
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // Initialize 5 empty save slots
+  const initialSlots: SaveSlot[] = Array.from({ length: TOTAL_SAVE_SLOTS }, (_, idx) => ({
+    slotIndex: idx + 1,
+    name: `存档 ${idx + 1}`,
+    updatedAt: 0,
+    taskCount: 0,
+    countdownCount: 0,
+    previewTitles: [],
+    tasks: [],
+    countdowns: [],
+    notes: '',
+  }));
+
+  saveLocalSaveSlots(initialSlots, username);
+  return initialSlots;
+}
+
+export function saveLocalSaveSlots(slots: SaveSlot[], username?: string): void {
+  const key = username ? `${SLOTS_KEY}_${username}` : SLOTS_KEY;
+  try {
+    localStorage.setItem(key, JSON.stringify(slots));
+  } catch (err) {
+    console.warn('[Storage] Error saving local save slots:', err);
+  }
+}
+
+export function saveCurrentToSlot(
+  slotIndex: number,
+  customName: string | null,
+  tasks: Task[],
+  countdowns: CountdownItem[],
+  username?: string,
+  notes?: string
+): SaveSlot[] {
+  const slots = getLocalSaveSlots(username);
+  const updated = slots.map(slot => {
+    if (slot.slotIndex === slotIndex) {
+      return {
+        slotIndex,
+        name: customName?.trim() || slot.name || `存档 ${slotIndex}`,
+        updatedAt: Date.now(),
+        taskCount: tasks.length,
+        countdownCount: countdowns.length,
+        previewTitles: tasks.slice(0, 6).map(t => t.title),
+        tasks: [...tasks],
+        countdowns: [...countdowns],
+        notes: notes || '',
+      };
+    }
+    return slot;
+  });
+
+  saveLocalSaveSlots(updated, username);
+  return updated;
+}
+
+export function clearSlot(slotIndex: number, username?: string): SaveSlot[] {
+  const slots = getLocalSaveSlots(username);
+  const updated = slots.map(slot => {
+    if (slot.slotIndex === slotIndex) {
+      return {
+        slotIndex,
+        name: `存档 ${slotIndex}`,
+        updatedAt: 0,
+        taskCount: 0,
+        countdownCount: 0,
+        previewTitles: [],
+        tasks: [],
+        countdowns: [],
+        notes: '',
+      };
+    }
+    return slot;
+  });
+
+  saveLocalSaveSlots(updated, username);
+  return updated;
+}
+
+export function renameSlot(slotIndex: number, newName: string, username?: string): SaveSlot[] {
+  const slots = getLocalSaveSlots(username);
+  const updated = slots.map(slot => {
+    if (slot.slotIndex === slotIndex) {
+      return {
+        ...slot,
+        name: newName.trim() || `存档 ${slotIndex}`,
+      };
+    }
+    return slot;
+  });
+
+  saveLocalSaveSlots(updated, username);
+  return updated;
+}
+
+// Fetch slots from cloud server
+export async function fetchCloudSlots(token: string): Promise<SaveSlot[] | null> {
+  try {
+    const res = await fetch('/api/v1/slots', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.slots)) {
+        return data.slots;
+      }
+    }
+  } catch (err) {
+    console.warn('[Fetch Cloud Slots] Error:', err);
+  }
+  return null;
+}
+
+// Sync slots to cloud server
+export async function syncSlotsToCloud(slots: SaveSlot[], token: string | null): Promise<void> {
+  if (!token) return;
+  try {
+    await fetch('/api/v1/slots', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ slots }),
+    });
+  } catch (err) {
+    console.warn('[Sync Slots To Cloud] Error:', err);
+  }
+}
+
+// Export single slot as JSON document
+export function exportSingleSlotJson(slot: SaveSlot): void {
+  const dateStr = slot.updatedAt ? new Date(slot.updatedAt).toISOString().split('T')[0] : 'empty';
+  const cleanName = slot.name.replace(/[/\\?%*:|"<>]/g, '_').trim();
+  const fileName = `focus_matrix_${cleanName}_${dateStr}.json`;
+  const blob = new Blob([JSON.stringify(slot, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 // Check if a task set is solely demo tasks or contains user custom tasks

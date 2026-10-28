@@ -62,10 +62,12 @@ const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const TASKS_FILE = path.join(DATA_DIR, 'user_tasks.json');
 const COUNTDOWNS_FILE = path.join(DATA_DIR, 'user_countdowns.json');
 const TASK_HISTORY_FILE = path.join(DATA_DIR, 'task_history.json');
+const SLOTS_FILE = path.join(DATA_DIR, 'user_slots.json');
 
 let users: Map<string, User> = new Map(); // username -> User
 let userTasks: Map<string, Task[]> = new Map(); // username -> Task[]
 let userCountdowns: Map<string, CountdownItem[]> = new Map(); // username -> CountdownItem[]
+let userSlots: Map<string, any[]> = new Map(); // username -> SaveSlot[]
 interface ServerTaskSnapshot {
   id: string;
   timestamp: number;
@@ -158,6 +160,15 @@ function initDb() {
         }
       }
     }
+    if (fs.existsSync(SLOTS_FILE)) {
+      const content = fs.readFileSync(SLOTS_FILE, 'utf-8');
+      const parsed = JSON.parse(content);
+      for (const [k, v] of Object.entries(parsed)) {
+        if (Array.isArray(v)) {
+          userSlots.set(k.toLowerCase(), v);
+        }
+      }
+    }
   } catch (err) {
     console.warn('[Db init warning]', err);
   }
@@ -191,6 +202,12 @@ function saveDb() {
       historyObj[k] = v.slice(-30);
     });
     fs.writeFileSync(TASK_HISTORY_FILE, JSON.stringify(historyObj, null, 2), 'utf-8');
+
+    const slotsObj: Record<string, any[]> = {};
+    userSlots.forEach((v, k) => {
+      slotsObj[k] = v;
+    });
+    fs.writeFileSync(SLOTS_FILE, JSON.stringify(slotsObj, null, 2), 'utf-8');
   } catch (err) {
     console.warn('[Db save warning]', err);
   }
@@ -391,24 +408,56 @@ app.post('/api/v1/tasks/sync', authenticate, (req, res) => {
 
     userTasks.set(username, validTasks);
 
-    // Record server snapshot if tasks changed
+    // Record server snapshot (User requirement: 历史回滚时间间隔长，12小时记录一次足够了)
+    const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
     const userHistory = taskHistory.get(username) || [];
-    const snapshot: ServerTaskSnapshot = {
-      id: `snap_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      timestamp: Date.now(),
-      taskCount: validTasks.length,
-      previewTitles: validTasks.slice(0, 5).map(t => t.title),
-      tasks: validTasks,
-    };
-    userHistory.push(snapshot);
-    if (userHistory.length > 30) {
-      userHistory.shift();
+    const lastSnap = userHistory.length > 0 ? userHistory[userHistory.length - 1] : null;
+
+    if (!lastSnap || (Date.now() - lastSnap.timestamp >= TWELVE_HOURS_MS)) {
+      const snapshot: ServerTaskSnapshot = {
+        id: `snap_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        timestamp: Date.now(),
+        taskCount: validTasks.length,
+        previewTitles: validTasks.slice(0, 5).map(t => t.title),
+        tasks: validTasks,
+      };
+      userHistory.push(snapshot);
+      if (userHistory.length > 30) {
+        userHistory.shift();
+      }
+      taskHistory.set(username, userHistory);
     }
-    taskHistory.set(username, userHistory);
 
     saveDb();
 
     res.json({ success: true, tasks: validTasks, serverTimestamp: Date.now() });
+  } catch (err) {
+    res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+// ==========================================
+// Save Slots Endpoints (游戏式存档 1, 存档 2...)
+// ==========================================
+
+// Get user save slots
+app.get('/api/v1/slots', authenticate, (req, res) => {
+  const username = (req as unknown as { currentUser: string }).currentUser;
+  const slots = userSlots.get(username) || [];
+  res.json({ success: true, slots, serverTimestamp: Date.now() });
+});
+
+// Sync user save slots
+app.post('/api/v1/slots', authenticate, (req, res) => {
+  try {
+    const username = (req as unknown as { currentUser: string }).currentUser;
+    const { slots } = req.body;
+    if (!Array.isArray(slots)) {
+      return res.status(400).json({ success: false, error: 'slots must be an array' });
+    }
+    userSlots.set(username, slots);
+    saveDb();
+    res.json({ success: true, slots, serverTimestamp: Date.now() });
   } catch (err) {
     res.status(500).json({ success: false, error: String(err) });
   }

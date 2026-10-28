@@ -1,51 +1,5 @@
 {
   "testadmin": [],
   "demo": [],
-  "13537777960": [
-    {
-      "id": "task-2",
-      "title": "回复例行邮件与消息通知",
-      "quadrant": "q3",
-      "completed": false,
-      "completedAt": null,
-      "dueDate": null,
-      "autoEscalatedFrom": null,
-      "recurrence": null,
-      "weekdays": null,
-      "folder": null,
-      "recurringParentId": null,
-      "createdAt": 1792317788530,
-      "updatedAt": 1792317788530
-    },
-    {
-      "id": "task-3",
-      "title": "整理桌面与无用文件清理",
-      "quadrant": "q4",
-      "completed": false,
-      "completedAt": null,
-      "dueDate": null,
-      "autoEscalatedFrom": null,
-      "recurrence": null,
-      "weekdays": null,
-      "folder": null,
-      "recurringParentId": null,
-      "createdAt": 1792321388530,
-      "updatedAt": 1792321388530
-    },
-    {
-      "id": "done-5",
-      "title": "清理云盘冗余备份与归档",
-      "quadrant": "q4",
-      "completed": true,
-      "completedAt": 1792141388530,
-      "dueDate": null,
-      "autoEscalatedFrom": null,
-      "recurrence": null,
-      "weekdays": null,
-      "folder": null,
-      "recurringParentId": null,
-      "createdAt": 1792065788530,
-      "updatedAt": 1792141388530
-    }
-  ]
+  "13537777960": []
 }

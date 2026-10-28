@@ -18,6 +18,8 @@ import {
   Database,
   FolderSync,
   Download,
+  Gamepad2,
+  History,
 } from 'lucide-react';
 import { Task, QuadrantId, AuthState, User, RecurrenceType, CountdownItem, QuadrantViewMode } from './types';
 import {
@@ -340,11 +342,19 @@ export default function App() {
     setTimeout(() => setCycleToast(null), 4000);
   };
 
-  // Handler for restoring tasks from Data Recovery modal
-  const handleRestoreTasksFromRecovery = (restored: Task[], message: string) => {
+  // Handler for restoring tasks from Data Recovery modal / save slots
+  const handleRestoreTasksFromRecovery = (
+    restored: Task[],
+    message: string,
+    restoredCountdowns?: CountdownItem[]
+  ) => {
     const { tasks: escalated } = checkAndEscalateTasks(restored);
     setTasks(escalated);
     syncTasksToCloud(escalated, authState.token, authState.user?.username);
+    if (restoredCountdowns && restoredCountdowns.length > 0) {
+      setCountdowns(restoredCountdowns);
+      syncCountdownsToCloud(restoredCountdowns, authState.token, authState.user?.username);
+    }
     setCycleToast(message);
     setTimeout(() => setCycleToast(null), 4000);
   };
@@ -732,14 +742,15 @@ export default function App() {
               )}
             </button>
 
-            {/* Data Recovery & Persistence Button */}
+            {/* Game Save Slots & Data Recovery Button */}
             <button
               onClick={() => setIsRecoveryModalOpen(true)}
-              className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 shadow-2xs transition-colors cursor-pointer"
-              title="查看服务器数据库持久化状态、历史快照与找回未登录数据"
+              className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50/80 dark:bg-indigo-950/40 text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 shadow-2xs transition-colors cursor-pointer"
+              title="打开本地存档（存档1、存档2...）、12小时历史回滚与数据中心"
             >
-              <Database className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-              <span className="hidden sm:inline">备份与找回</span>
+              <Gamepad2 className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+              <span className="hidden sm:inline">本地存档</span>
+              <span className="text-[10px] px-1 py-0.2 rounded bg-indigo-600 text-white font-mono font-bold">1~5</span>
             </button>
 
             {/* User Account / Login Button */}
@@ -775,8 +786,19 @@ export default function App() {
                       }}
                       className="w-full px-3.5 py-2 flex items-center space-x-2 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/70 text-left transition-colors cursor-pointer"
                     >
-                      <FolderSync className="w-3.5 h-3.5 text-indigo-500" />
-                      <span>数据找回与历史快照</span>
+                      <Gamepad2 className="w-3.5 h-3.5 text-indigo-500" />
+                      <span>本地存档槽位 (存档1~5)</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setShowUserDropdown(false);
+                        setIsRecoveryModalOpen(true);
+                      }}
+                      className="w-full px-3.5 py-2 flex items-center space-x-2 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/70 text-left transition-colors cursor-pointer"
+                    >
+                      <History className="w-3.5 h-3.5 text-amber-500" />
+                      <span>12小时自动快照回滚</span>
                     </button>
 
                     <button

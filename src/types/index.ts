@@ -59,3 +59,15 @@ export interface CountdownItem {
   createdAt: number;
   updatedAt: number;
 }
+
+export interface SaveSlot {
+  slotIndex: number; // 1, 2, 3, 4, 5...
+  name: string; // e.g. "存档 1: 阶段备忘"
+  updatedAt: number; // timestamp
+  taskCount: number;
+  countdownCount: number;
+  previewTitles: string[];
+  tasks: Task[];
+  countdowns: CountdownItem[];
+  notes?: string;
+}
