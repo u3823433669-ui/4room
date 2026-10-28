@@ -61,14 +61,62 @@ const DATA_DIR = path.join(__dirname, '.data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const TASKS_FILE = path.join(DATA_DIR, 'user_tasks.json');
 const COUNTDOWNS_FILE = path.join(DATA_DIR, 'user_countdowns.json');
+const TASK_HISTORY_FILE = path.join(DATA_DIR, 'task_history.json');
 
 let users: Map<string, User> = new Map(); // username -> User
 let userTasks: Map<string, Task[]> = new Map(); // username -> Task[]
 let userCountdowns: Map<string, CountdownItem[]> = new Map(); // username -> CountdownItem[]
+interface ServerTaskSnapshot {
+  id: string;
+  timestamp: number;
+  taskCount: number;
+  previewTitles: string[];
+  tasks: Task[];
+}
+let taskHistory: Map<string, ServerTaskSnapshot[]> = new Map();
 
 // Helper password hash
 function hashPassword(password: string): string {
   return crypto.createHash('sha256').update(password + '_qm_salt_2026').digest('hex');
+}
+
+// Token HMAC signer & verifier: ensures server restarts NEVER invalidate user tokens
+const TOKEN_SECRET = 'focus_matrix_secret_hmac_key_2026';
+function generateSignedToken(username: string): string {
+  const cleanUser = username.trim().toLowerCase();
+  const time = Date.now();
+  const randomHex = crypto.randomBytes(8).toString('hex');
+  const payload = `${cleanUser}:${time}:${randomHex}`;
+  const sig = crypto.createHmac('sha256', TOKEN_SECRET).update(payload).digest('hex').substring(0, 24);
+  const token = `tok_${Buffer.from(payload).toString('base64url')}_${sig}`;
+  sessionTokens.set(token, cleanUser);
+  return token;
+}
+
+function verifyUserToken(token: string): string | null {
+  if (!token) return null;
+  if (sessionTokens.has(token)) {
+    return sessionTokens.get(token)!;
+  }
+  if (token.startsWith('tok_')) {
+    const parts = token.split('_');
+    if (parts.length === 3) {
+      const payloadBase64 = parts[1];
+      const sig = parts[2];
+      try {
+        const payload = Buffer.from(payloadBase64, 'base64url').toString('utf-8');
+        const expectedSig = crypto.createHmac('sha256', TOKEN_SECRET).update(payload).digest('hex').substring(0, 24);
+        if (sig === expectedSig) {
+          const [user] = payload.split(':');
+          sessionTokens.set(token, user);
+          return user;
+        }
+      } catch {
+        // invalid format
+      }
+    }
+  }
+  return null;
 }
 
 function initDb() {
@@ -101,6 +149,15 @@ function initDb() {
         }
       }
     }
+    if (fs.existsSync(TASK_HISTORY_FILE)) {
+      const content = fs.readFileSync(TASK_HISTORY_FILE, 'utf-8');
+      const parsed = JSON.parse(content);
+      for (const [k, v] of Object.entries(parsed)) {
+        if (Array.isArray(v)) {
+          taskHistory.set(k.toLowerCase(), v as ServerTaskSnapshot[]);
+        }
+      }
+    }
   } catch (err) {
     console.warn('[Db init warning]', err);
   }
@@ -128,6 +185,12 @@ function saveDb() {
       countdownsObj[k] = v;
     });
     fs.writeFileSync(COUNTDOWNS_FILE, JSON.stringify(countdownsObj, null, 2), 'utf-8');
+
+    const historyObj: Record<string, ServerTaskSnapshot[]> = {};
+    taskHistory.forEach((v, k) => {
+      historyObj[k] = v.slice(-30);
+    });
+    fs.writeFileSync(TASK_HISTORY_FILE, JSON.stringify(historyObj, null, 2), 'utf-8');
   } catch (err) {
     console.warn('[Db save warning]', err);
   }
@@ -160,8 +223,7 @@ app.post('/api/v1/auth/register', (req, res) => {
   const existing = users.get(cleanUser);
   if (existing) {
     if (existing.passwordHash === hashPassword(password)) {
-      const token = `token_${Date.now()}_${crypto.randomBytes(16).toString('hex')}`;
-      sessionTokens.set(token, cleanUser);
+      const token = generateSignedToken(cleanUser);
       return res.json({
         success: true,
         token,
@@ -188,8 +250,7 @@ app.post('/api/v1/auth/register', (req, res) => {
   }
   saveDb();
 
-  const token = `token_${Date.now()}_${crypto.randomBytes(16).toString('hex')}`;
-  sessionTokens.set(token, cleanUser);
+  const token = generateSignedToken(cleanUser);
 
   res.json({
     success: true,
@@ -244,8 +305,7 @@ app.post('/api/v1/auth/login', (req, res) => {
     });
   }
 
-  const token = `token_${Date.now()}_${crypto.randomBytes(16).toString('hex')}`;
-  sessionTokens.set(token, cleanUser);
+  const token = generateSignedToken(cleanUser);
 
   res.json({
     success: true,
@@ -263,14 +323,34 @@ function authenticate(req: express.Request, res: express.Response, next: express
   }
 
   const token = authHeader.split(' ')[1];
-  const username = sessionTokens.get(token);
-  if (!username || !users.has(username)) {
+  const verifiedUsername = verifyUserToken(token);
+  if (!verifiedUsername || !users.has(verifiedUsername)) {
     return res.status(401).json({ success: false, error: '登录状态失效，请重新登录' });
   }
 
-  (req as unknown as { currentUser: string }).currentUser = username;
+  (req as unknown as { currentUser: string }).currentUser = verifiedUsername;
   next();
 }
+
+// Server Storage & Diagnostic Status
+app.get('/api/v1/server-status', (req, res) => {
+  const totalUsers = users.size;
+  let totalTasks = 0;
+  userTasks.forEach(arr => {
+    totalTasks += arr.length;
+  });
+  res.json({
+    success: true,
+    server: 'FocusMatrix-Storage-Engine',
+    persistence: 'DISK_JSON_PERMANENT',
+    dataFile: '.data/user_tasks.json',
+    totalUsers,
+    totalTasks,
+    activeAccounts: Array.from(users.keys()),
+    uptimeSeconds: Math.floor(process.uptime()),
+    timestamp: Date.now(),
+  });
+});
 
 // Get user tasks
 app.get('/api/v1/tasks', authenticate, (req, res) => {
@@ -279,7 +359,7 @@ app.get('/api/v1/tasks', authenticate, (req, res) => {
   res.json({ success: true, tasks, serverTimestamp: Date.now() });
 });
 
-// Save / sync user tasks
+// Save / sync user tasks with automatic snapshot recording
 app.post('/api/v1/tasks/sync', authenticate, (req, res) => {
   try {
     const username = (req as unknown as { currentUser: string }).currentUser;
@@ -289,7 +369,7 @@ app.post('/api/v1/tasks/sync', authenticate, (req, res) => {
       return res.status(400).json({ success: false, error: 'tasks must be an array' });
     }
 
-    // Sanitize and save exact tasks from client (so deletions are properly persisted)
+    // Sanitize and save exact tasks from client
     const validTasks: Task[] = tasks
       .filter((t: any) => t && typeof t.id === 'string' && typeof t.title === 'string')
       .map((t: any) => ({
@@ -310,9 +390,57 @@ app.post('/api/v1/tasks/sync', authenticate, (req, res) => {
       }));
 
     userTasks.set(username, validTasks);
+
+    // Record server snapshot if tasks changed
+    const userHistory = taskHistory.get(username) || [];
+    const snapshot: ServerTaskSnapshot = {
+      id: `snap_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      timestamp: Date.now(),
+      taskCount: validTasks.length,
+      previewTitles: validTasks.slice(0, 5).map(t => t.title),
+      tasks: validTasks,
+    };
+    userHistory.push(snapshot);
+    if (userHistory.length > 30) {
+      userHistory.shift();
+    }
+    taskHistory.set(username, userHistory);
+
     saveDb();
 
     res.json({ success: true, tasks: validTasks, serverTimestamp: Date.now() });
+  } catch (err) {
+    res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+// Task history snapshots list
+app.get('/api/v1/tasks/history', authenticate, (req, res) => {
+  const username = (req as unknown as { currentUser: string }).currentUser;
+  const history = taskHistory.get(username) || [];
+  // Return metadata without giant task payloads
+  const list = history.map(h => ({
+    id: h.id,
+    timestamp: h.timestamp,
+    taskCount: h.taskCount,
+    previewTitles: h.previewTitles,
+  })).reverse();
+  res.json({ success: true, history: list });
+});
+
+// Restore from server snapshot
+app.post('/api/v1/tasks/history/restore', authenticate, (req, res) => {
+  try {
+    const username = (req as unknown as { currentUser: string }).currentUser;
+    const { snapshotId } = req.body;
+    const history = taskHistory.get(username) || [];
+    const target = history.find(h => h.id === snapshotId);
+    if (!target) {
+      return res.status(404).json({ success: false, error: '快照未找到' });
+    }
+    userTasks.set(username, target.tasks);
+    saveDb();
+    res.json({ success: true, tasks: target.tasks, serverTimestamp: Date.now() });
   } catch (err) {
     res.status(500).json({ success: false, error: String(err) });
   }

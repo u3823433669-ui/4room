@@ -110,6 +110,7 @@ export function syncTasksToCloud(
   onRemoteMerged?: (tasks: Task[]) => void
 ): void {
   saveLocalTasks(tasks, username);
+  saveLocalSnapshot(tasks);
 
   if (!token) return;
 
@@ -139,6 +140,260 @@ export function syncTasksToCloud(
       // offline fallback is safe in local storage
     }
   }, 400);
+}
+
+// ==========================================
+// Snapshots & Data Recovery Utilities
+// ==========================================
+
+const SNAPSHOTS_KEY = 'focus_matrix_snapshots';
+
+export interface TaskSnapshotItem {
+  id: string;
+  timestamp: number;
+  taskCount: number;
+  previewTitles: string[];
+  tasks: Task[];
+}
+
+export function getLocalSnapshots(): TaskSnapshotItem[] {
+  try {
+    const raw = localStorage.getItem(SNAPSHOTS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return [];
+}
+
+export function saveLocalSnapshot(tasks: Task[]): void {
+  if (!tasks || tasks.length === 0) return;
+  try {
+    const existing = getLocalSnapshots();
+    // Avoid duplicate snapshot if nothing changed within 30 seconds
+    if (existing.length > 0) {
+      const last = existing[0];
+      if (
+        Date.now() - last.timestamp < 30000 &&
+        last.taskCount === tasks.length &&
+        JSON.stringify(last.previewTitles) === JSON.stringify(tasks.slice(0, 4).map(t => t.title))
+      ) {
+        return;
+      }
+    }
+
+    const newSnapshot: TaskSnapshotItem = {
+      id: `snap_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      timestamp: Date.now(),
+      taskCount: tasks.length,
+      previewTitles: tasks.slice(0, 5).map(t => t.title),
+      tasks: [...tasks],
+    };
+
+    const updated = [newSnapshot, ...existing].slice(0, 20); // keep last 20 local snapshots
+    localStorage.setItem(SNAPSHOTS_KEY, JSON.stringify(updated));
+  } catch (err) {
+    console.warn('[Storage] Error saving local snapshot:', err);
+  }
+}
+
+// Check if a task set is solely demo tasks or contains user custom tasks
+export function isUserCustomTasks(tasks: Task[]): boolean {
+  if (!tasks || tasks.length === 0) return false;
+  const demoIds = new Set(['task-1', 'task-2', 'task-3', 'done-1', 'done-2', 'done-3', 'done-4', 'done-5']);
+  return tasks.some(t => !demoIds.has(t.id));
+}
+
+// Scan all localStorage sources to find any stored task lists (guest, other accounts, backups)
+export interface ScannedTaskSource {
+  key: string;
+  label: string;
+  count: number;
+  tasks: Task[];
+  hasCustomTasks: boolean;
+  sampleTitles: string[];
+}
+
+export function scanAllLocalTaskSources(currentUsername?: string): ScannedTaskSource[] {
+  const sources: ScannedTaskSource[] = [];
+
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith('focus_matrix_local_tasks')) continue;
+
+      const raw = localStorage.getItem(k);
+      if (!raw) continue;
+
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const isCurrent = currentUsername
+            ? k === `${LOCAL_STORAGE_KEY}_${currentUsername}`
+            : k === LOCAL_STORAGE_KEY;
+
+          let label = '未登录/游客本地存储 (Guest)';
+          if (k.startsWith(`${LOCAL_STORAGE_KEY}_`)) {
+            const user = k.replace(`${LOCAL_STORAGE_KEY}_`, '');
+            label = `账号 [${user}] 存储缓存`;
+          }
+
+          if (isCurrent) {
+            label += ' (当前使用中)';
+          }
+
+          sources.push({
+            key: k,
+            label,
+            count: parsed.length,
+            tasks: parsed,
+            hasCustomTasks: isUserCustomTasks(parsed),
+            sampleTitles: parsed.slice(0, 4).map((t: any) => t.title || '未命名事项'),
+          });
+        }
+      } catch {
+        // ignore invalid json
+      }
+    }
+  } catch (err) {
+    console.warn('[Storage] Scan sources error:', err);
+  }
+
+  return sources;
+}
+
+// Smart merge of two task lists avoiding duplicate titles/IDs
+export function mergeTaskLists(existing: Task[], incoming: Task[]): Task[] {
+  const existingIds = new Set(existing.map(t => t.id));
+  const existingKeySet = new Set(existing.map(t => `${t.quadrant}_${t.title.trim().toLowerCase()}`));
+  const merged = [...existing];
+
+  for (const item of incoming) {
+    const key = `${item.quadrant}_${item.title.trim().toLowerCase()}`;
+    if (!existingIds.has(item.id) && !existingKeySet.has(key)) {
+      merged.push({
+        ...item,
+        id: `task_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        updatedAt: Date.now(),
+      });
+      existingKeySet.add(key);
+    }
+  }
+
+  return merged;
+}
+
+// Export backup to JSON file download
+export function exportBackupJson(
+  tasks: Task[],
+  countdowns: CountdownItem[],
+  username?: string
+): void {
+  const payload = {
+    app: 'FocusMatrix',
+    version: '2.0.0',
+    exportTime: new Date().toISOString(),
+    username: username || 'guest',
+    tasks,
+    countdowns,
+  };
+
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const dateStr = new Date().toISOString().split('T')[0];
+  a.href = url;
+  a.download = `focus_matrix_backup_${username || 'local'}_${dateStr}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// Import backup from JSON file
+export function parseBackupJson(jsonStr: string): { tasks: Task[]; countdowns: CountdownItem[] } | null {
+  try {
+    const data = JSON.parse(jsonStr);
+    if (!data || typeof data !== 'object') return null;
+
+    const tasks: Task[] = Array.isArray(data.tasks) ? data.tasks : [];
+    const countdowns: CountdownItem[] = Array.isArray(data.countdowns) ? data.countdowns : [];
+    return { tasks, countdowns };
+  } catch {
+    return null;
+  }
+}
+
+// Server Diagnostic Status fetcher
+export async function fetchServerStatus(): Promise<{
+  success: boolean;
+  server: string;
+  persistence: string;
+  dataFile: string;
+  totalUsers: number;
+  totalTasks: number;
+  uptimeSeconds: number;
+} | null> {
+  try {
+    const res = await fetch('/api/v1/server-status');
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn('[Server Status] Error:', err);
+  }
+  return null;
+}
+
+// Server Snapshot History fetcher
+export async function fetchServerSnapshots(token: string): Promise<Array<{
+  id: string;
+  timestamp: number;
+  taskCount: number;
+  previewTitles: string[];
+}> | null> {
+  try {
+    const res = await fetch('/api/v1/tasks/history', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.history)) {
+        return data.history;
+      }
+    }
+  } catch (err) {
+    console.warn('[Server Snapshots] Error:', err);
+  }
+  return null;
+}
+
+// Restore from Server Snapshot
+export async function restoreServerSnapshot(token: string, snapshotId: string): Promise<Task[] | null> {
+  try {
+    const res = await fetch('/api/v1/tasks/history/restore', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ snapshotId }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.tasks)) {
+        return data.tasks;
+      }
+    }
+  } catch (err) {
+    console.warn('[Restore Server Snapshot] Error:', err);
+  }
+  return null;
 }
 
 // ==========================================

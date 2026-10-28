@@ -15,6 +15,9 @@ import {
   StickyNote,
   Folder,
   Bell,
+  Database,
+  FolderSync,
+  Download,
 } from 'lucide-react';
 import { Task, QuadrantId, AuthState, User, RecurrenceType, CountdownItem, QuadrantViewMode } from './types';
 import {
@@ -30,6 +33,10 @@ import {
   saveLocalCountdowns,
   fetchCloudCountdowns,
   syncCountdownsToCloud,
+  isUserCustomTasks,
+  mergeTaskLists,
+  exportBackupJson,
+  saveLocalSnapshot,
 } from './utils/storage';
 import { checkAndEscalateTasks } from './utils/escalation';
 import { computeNextDueDate } from './utils/recurrence';
@@ -38,6 +45,7 @@ import { MinimalQuadrant } from './components/MinimalQuadrant';
 import { CompletionStatsModal } from './components/CompletionStatsModal';
 import { CountdownModal } from './components/CountdownModal';
 import { AuthModal } from './components/AuthModal';
+import { DataRecoveryModal } from './components/DataRecoveryModal';
 
 export default function App() {
   const [authState, setAuthState] = useState<AuthState>(() => getStoredAuth());
@@ -76,9 +84,39 @@ export default function App() {
 
   const [isStatsModalOpen, setIsStatsModalOpen] = useState<boolean>(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [isRecoveryModalOpen, setIsRecoveryModalOpen] = useState<boolean>(false);
+  const [unmergedGuestTasks, setUnmergedGuestTasks] = useState<Task[] | null>(null);
+  const [dismissedGuestAlert, setDismissedGuestAlert] = useState<boolean>(false);
   const [showUserDropdown, setShowUserDropdown] = useState<boolean>(false);
   const [escalatedAlert, setEscalatedAlert] = useState<string | null>(null);
   const [cycleToast, setCycleToast] = useState<string | null>(null);
+
+  // Check if there are unmerged guest tasks stored in localStorage
+  useEffect(() => {
+    if (authState.user) {
+      try {
+        const raw = localStorage.getItem('focus_matrix_local_tasks');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const currentTitles = new Set(tasks.map(t => `${t.quadrant}_${t.title.trim().toLowerCase()}`));
+            const missing = parsed.filter(
+              t => !currentTitles.has(`${t.quadrant}_${t.title.trim().toLowerCase()}`)
+            );
+            if (missing.length > 0 && isUserCustomTasks(parsed)) {
+              setUnmergedGuestTasks(missing);
+            } else {
+              setUnmergedGuestTasks(null);
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+    } else {
+      setUnmergedGuestTasks(null);
+    }
+  }, [authState.user, tasks]);
 
   // Dark mode effect
   useEffect(() => {
@@ -97,9 +135,16 @@ export default function App() {
       if (authState.token && authState.user) {
         const cloudTasks = await fetchCloudTasks(authState.token);
         if (cloudTasks !== null) {
-          const { tasks: escalated } = checkAndEscalateTasks(cloudTasks);
-          setTasks(escalated);
-          saveLocalTasks(escalated, authState.user.username);
+          // If server has tasks, check if on-screen tasks contain user custom tasks not yet on server
+          setTasks(current => {
+            let finalizedTasks = cloudTasks;
+            if (isUserCustomTasks(current)) {
+              finalizedTasks = mergeTaskLists(cloudTasks, current);
+            }
+            const { tasks: escalated } = checkAndEscalateTasks(finalizedTasks);
+            saveLocalTasks(escalated, authState.user!.username);
+            return escalated;
+          });
         }
         const cloudCountdowns = await fetchCloudCountdowns(authState.token);
         if (cloudCountdowns !== null) {
@@ -237,8 +282,17 @@ export default function App() {
 
     // Fetch user cloud tasks
     const cloudTasks = await fetchCloudTasks(token);
-    if (cloudTasks && cloudTasks.length > 0) {
-      const { tasks: escalated } = checkAndEscalateTasks(cloudTasks);
+    const hasServerTasks = cloudTasks && cloudTasks.length > 0;
+    const currentHasCustom = isUserCustomTasks(tasks);
+
+    if (hasServerTasks) {
+      let finalTasks = cloudTasks;
+      // If user had added custom tasks on screen, merge them so they're not lost!
+      if (currentHasCustom) {
+        finalTasks = mergeTaskLists(cloudTasks, tasks);
+        syncTasksToCloud(finalTasks, token, user.username);
+      }
+      const { tasks: escalated } = checkAndEscalateTasks(finalTasks);
       setTasks(escalated);
       saveLocalTasks(escalated, user.username);
     } else if (tasks.length > 0) {
@@ -257,16 +311,42 @@ export default function App() {
     }
   };
 
-  // Logout
+  // Logout with snapshot archiving to guarantee zero data loss
   const handleLogout = () => {
+    saveLocalSnapshot(tasks);
     clearStoredAuth();
     setAuthState({ token: null, user: null });
     setShowUserDropdown(false);
+    setUnmergedGuestTasks(null);
+    setDismissedGuestAlert(false);
+
     // Reload guest tasks & countdowns
     const guestTasks = loadLocalTasks();
     setTasks(guestTasks);
     const guestCountdowns = loadLocalCountdowns();
     setCountdowns(guestCountdowns);
+  };
+
+  // Merge unmerged guest tasks into current account
+  const handleMergeGuestTasks = () => {
+    if (!unmergedGuestTasks || unmergedGuestTasks.length === 0) return;
+    const merged = mergeTaskLists(tasks, unmergedGuestTasks);
+    const { tasks: escalated } = checkAndEscalateTasks(merged);
+    setTasks(escalated);
+    syncTasksToCloud(escalated, authState.token, authState.user?.username);
+    setUnmergedGuestTasks(null);
+    setDismissedGuestAlert(true);
+    setCycleToast(`已成功将 ${unmergedGuestTasks.length} 条未登录本地任务合并至当前账号！`);
+    setTimeout(() => setCycleToast(null), 4000);
+  };
+
+  // Handler for restoring tasks from Data Recovery modal
+  const handleRestoreTasksFromRecovery = (restored: Task[], message: string) => {
+    const { tasks: escalated } = checkAndEscalateTasks(restored);
+    setTasks(escalated);
+    syncTasksToCloud(escalated, authState.token, authState.user?.username);
+    setCycleToast(message);
+    setTimeout(() => setCycleToast(null), 4000);
   };
 
   // Add task with optional due date, recurrence, advanceDays, weekdays and folder
@@ -652,6 +732,16 @@ export default function App() {
               )}
             </button>
 
+            {/* Data Recovery & Persistence Button */}
+            <button
+              onClick={() => setIsRecoveryModalOpen(true)}
+              className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 shadow-2xs transition-colors cursor-pointer"
+              title="查看服务器数据库持久化状态、历史快照与找回未登录数据"
+            >
+              <Database className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+              <span className="hidden sm:inline">备份与找回</span>
+            </button>
+
             {/* User Account / Login Button */}
             {authState.user ? (
               <div className="relative">
@@ -665,7 +755,7 @@ export default function App() {
 
                 {showUserDropdown && (
                   <div
-                    className="absolute right-0 top-10 w-44 bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 py-1.5 z-30 animate-in fade-in zoom-in-95 duration-150 text-xs"
+                    className="absolute right-0 top-10 w-48 bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 py-1.5 z-30 animate-in fade-in zoom-in-95 duration-150 text-xs"
                     onMouseLeave={() => setShowUserDropdown(false)}
                   >
                     <div className="px-3.5 py-2 border-b border-slate-100 dark:border-slate-700 text-slate-500">
@@ -673,7 +763,34 @@ export default function App() {
                       <strong className="block text-slate-800 dark:text-slate-200 font-bold truncate">
                         {authState.user.username}
                       </strong>
+                      <span className="text-[10px] text-emerald-600 dark:text-emerald-400 block mt-0.5">
+                        ● 云端持久化存储已连接
+                      </span>
                     </div>
+
+                    <button
+                      onClick={() => {
+                        setShowUserDropdown(false);
+                        setIsRecoveryModalOpen(true);
+                      }}
+                      className="w-full px-3.5 py-2 flex items-center space-x-2 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/70 text-left transition-colors cursor-pointer"
+                    >
+                      <FolderSync className="w-3.5 h-3.5 text-indigo-500" />
+                      <span>数据找回与历史快照</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setShowUserDropdown(false);
+                        exportBackupJson(tasks, countdowns, authState.user?.username);
+                      }}
+                      className="w-full px-3.5 py-2 flex items-center space-x-2 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/70 text-left transition-colors cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5 text-emerald-500" />
+                      <span>导出离线备份 (JSON)</span>
+                    </button>
+
+                    <div className="border-t border-slate-100 dark:border-slate-700 my-1" />
 
                     <button
                       onClick={handleLogout}
@@ -697,6 +814,45 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {/* Unmerged Guest Tasks Prompt Banner */}
+      {unmergedGuestTasks && unmergedGuestTasks.length > 0 && !dismissedGuestAlert && (
+        <div className="bg-gradient-to-r from-indigo-600 via-indigo-700 to-indigo-800 text-white px-3 py-2 text-xs shadow-md animate-in fade-in duration-200">
+          <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center space-x-2 min-w-0">
+              <span className="flex items-center justify-center w-5 h-5 rounded-full bg-white/20 text-white shrink-0">
+                <Sparkles className="w-3.5 h-3.5" />
+              </span>
+              <span className="font-bold shrink-0">数据找回提示：</span>
+              <span className="truncate">
+                检测到您之前在未登录状态下创建了 <strong className="underline underline-offset-2">{unmergedGuestTasks.length}</strong> 条任务数据（{unmergedGuestTasks.slice(0, 2).map(t => `【${t.title}】`).join('、')}{unmergedGuestTasks.length > 2 ? '等' : ''}）
+              </span>
+            </div>
+            <div className="flex items-center space-x-2 shrink-0">
+              <button
+                onClick={handleMergeGuestTasks}
+                className="px-3 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer flex items-center space-x-1"
+              >
+                <FolderSync className="w-3 h-3" />
+                <span>一键合并导入当前账号</span>
+              </button>
+              <button
+                onClick={() => setIsRecoveryModalOpen(true)}
+                className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white font-medium text-xs transition-colors cursor-pointer"
+              >
+                查看详情
+              </button>
+              <button
+                onClick={() => setDismissedGuestAlert(true)}
+                className="text-white/70 hover:text-white text-xs px-1.5 py-0.5 rounded cursor-pointer"
+                title="关闭提示条"
+              >
+                忽略 ✕
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Active reminders banner if any tasks are currently in their reminder window */}
       {activeReminderTasks.length > 0 && !dismissedReminderBanner && (
@@ -879,6 +1035,20 @@ export default function App() {
         onClose={() => setIsAuthModalOpen(false)}
         onSuccess={handleAuthSuccess}
       />
+
+      {/* Data Recovery & Persistence Modal */}
+      {isRecoveryModalOpen && (
+        <DataRecoveryModal
+          isOpen={isRecoveryModalOpen}
+          onClose={() => setIsRecoveryModalOpen(false)}
+          currentTasks={tasks}
+          currentCountdowns={countdowns}
+          user={authState.user}
+          token={authState.token}
+          onRestoreTasks={handleRestoreTasksFromRecovery}
+          onForceSync={() => syncTasksToCloud(tasks, authState.token, authState.user?.username)}
+        />
+      )}
     </div>
   );
 }
