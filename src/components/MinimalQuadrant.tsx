@@ -320,9 +320,16 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
   };
 
   const isTaskInActiveReminder = (task: Task) => {
-    if (task.completed || !task.dueDate || task.advanceDays === null || task.advanceDays === undefined) {
+    if (task.completed || !task.dueDate) {
       return false;
     }
+    const effectiveAdvance =
+      task.advanceDays !== undefined && task.advanceDays !== null
+        ? task.advanceDays
+        : task.recurrence && task.recurrence !== 'none'
+        ? (getDefaultAdvanceDays(task.recurrence) ?? 0)
+        : null;
+    if (effectiveAdvance === null) return false;
     try {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -330,7 +337,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
       const dueDay = new Date(y, m - 1, d);
       dueDay.setHours(0, 0, 0, 0);
       const diffDays = Math.round((dueDay.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-      return diffDays <= task.advanceDays && diffDays >= 0;
+      return diffDays <= effectiveAdvance && diffDays >= 0;
     } catch {
       return false;
     }
@@ -343,9 +350,9 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
     const defAdvance =
       task.advanceDays !== undefined && task.advanceDays !== null
         ? task.advanceDays
-        : task.dueDate
-        ? 0
-        : getDefaultAdvanceDays(task.recurrence);
+        : task.recurrence && task.recurrence !== 'none'
+        ? (getDefaultAdvanceDays(task.recurrence) ?? 0)
+        : 0; // Default to 当天提醒 (0)
     setTempAdvanceDays(defAdvance);
     setTempDueDate(task.dueDate || new Date().toISOString().split('T')[0]);
 
@@ -808,7 +815,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                                   className="text-[9px] px-1 py-0.2 rounded bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 font-semibold cursor-pointer"
                                   title="点击更改循环规则"
                                 >
-                                  {getRecurrenceLabel(task.recurrence)}
+                                  {getRecurrenceLabel(task.recurrence, task.weekdays)}
                                 </button>
                               )}
 
@@ -1661,7 +1668,7 @@ export const MinimalQuadrant: React.FC<MinimalQuadrantProps> = ({
                         const tom = new Date();
                         tom.setDate(tom.getDate() + 1);
                         setSelectedDueDate(tom.toISOString().split('T')[0]);
-                        if (selectedAdvanceDays === null) setSelectedAdvanceDays(1);
+                        if (selectedAdvanceDays === null) setSelectedAdvanceDays(0);
                       }}
                       className="px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 text-[9px] cursor-pointer"
                     >

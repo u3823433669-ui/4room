@@ -41,7 +41,7 @@ import {
   saveLocalSnapshot,
 } from './utils/storage';
 import { checkAndEscalateTasks } from './utils/escalation';
-import { computeNextDueDate } from './utils/recurrence';
+import { computeNextDueDate, getDefaultAdvanceDays } from './utils/recurrence';
 import { calculateCountdownStats, formatPercent } from './utils/countdown';
 import { MinimalQuadrant } from './components/MinimalQuadrant';
 import { CompletionStatsModal } from './components/CompletionStatsModal';
@@ -149,9 +149,17 @@ export default function App() {
           });
         }
         const cloudCountdowns = await fetchCloudCountdowns(authState.token);
-        if (cloudCountdowns !== null) {
+        if (cloudCountdowns !== null && cloudCountdowns.length > 0) {
           setCountdowns(cloudCountdowns);
           saveLocalCountdowns(cloudCountdowns, authState.user.username);
+        } else {
+          // Cloud has no countdowns yet - preserve local/default countdowns and upload to cloud
+          setCountdowns(current => {
+            const fallback = current && current.length > 0 ? current : loadLocalCountdowns();
+            syncCountdownsToCloud(fallback, authState.token, authState.user?.username);
+            saveLocalCountdowns(fallback, authState.user!.username);
+            return fallback;
+          });
         }
       }
     }
@@ -307,26 +315,36 @@ export default function App() {
     if (cloudCountdowns && cloudCountdowns.length > 0) {
       setCountdowns(cloudCountdowns);
       saveLocalCountdowns(cloudCountdowns, user.username);
-    } else if (countdowns.length > 0) {
-      syncCountdownsToCloud(countdowns, token, user.username);
-      saveLocalCountdowns(countdowns, user.username);
+    } else {
+      const fallback = countdowns && countdowns.length > 0 ? countdowns : loadLocalCountdowns();
+      setCountdowns(fallback);
+      syncCountdownsToCloud(fallback, token, user.username);
+      saveLocalCountdowns(fallback, user.username);
     }
   };
 
   // Logout with snapshot archiving to guarantee zero data loss
   const handleLogout = () => {
-    saveLocalSnapshot(tasks);
+    // 1. Immediately persist user's current tasks and countdowns before clearing session
+    if (authState.user) {
+      saveLocalTasks(tasks, authState.user.username);
+      saveLocalCountdowns(countdowns, authState.user.username);
+      saveLocalSnapshot(tasks);
+    }
     clearStoredAuth();
     setAuthState({ token: null, user: null });
     setShowUserDropdown(false);
     setUnmergedGuestTasks(null);
     setDismissedGuestAlert(false);
 
-    // Reload guest tasks & countdowns
+    // 2. Reload guest tasks & countdowns (preserving countdowns if guest has none)
     const guestTasks = loadLocalTasks();
     setTasks(guestTasks);
     const guestCountdowns = loadLocalCountdowns();
-    setCountdowns(guestCountdowns);
+    const finalGuestCountdowns =
+      guestCountdowns && guestCountdowns.length > 0 ? guestCountdowns : countdowns;
+    setCountdowns(finalGuestCountdowns);
+    saveLocalCountdowns(finalGuestCountdowns);
   };
 
   // Merge unmerged guest tasks into current account
@@ -588,13 +606,19 @@ export default function App() {
 
     return tasks.filter(t => {
       if (t.completed || !t.dueDate) return false;
-      if (t.advanceDays === null || t.advanceDays === undefined) return false;
+      const effectiveAdvance =
+        t.advanceDays !== null && t.advanceDays !== undefined
+          ? t.advanceDays
+          : t.recurrence && t.recurrence !== 'none'
+          ? (getDefaultAdvanceDays(t.recurrence) ?? 0)
+          : null;
+      if (effectiveAdvance === null) return false;
       try {
         const [y, m, d] = t.dueDate.split('-').map(Number);
         const dueDay = new Date(y, m - 1, d);
         dueDay.setHours(0, 0, 0, 0);
         const diffDays = Math.round((dueDay.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-        return diffDays <= t.advanceDays && diffDays >= 0;
+        return diffDays <= effectiveAdvance && diffDays >= 0;
       } catch {
         return false;
       }

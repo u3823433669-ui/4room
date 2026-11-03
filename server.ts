@@ -44,6 +44,7 @@ interface CountdownItem {
   startDate?: string | null;
   category: 'life' | 'work' | 'exam' | 'anniversary' | 'health' | 'other';
   isPinned?: boolean;
+  showOnHome?: boolean;
   notes?: string;
   milestones?: CountdownMilestone[];
   createdAt: number;
@@ -146,8 +147,23 @@ function initDb() {
       const content = fs.readFileSync(COUNTDOWNS_FILE, 'utf-8');
       const parsed = JSON.parse(content);
       for (const [k, v] of Object.entries(parsed)) {
-        if (Array.isArray(v)) {
+        if (Array.isArray(v) && v.length > 0) {
           userCountdowns.set(k.toLowerCase(), v as CountdownItem[]);
+        } else {
+          userCountdowns.set(k.toLowerCase(), [
+            {
+              id: 'cd_2027_new_year',
+              title: '2027 新年元旦',
+              targetDate: '2027-01-01',
+              startDate: '2026-01-01',
+              category: 'life',
+              isPinned: true,
+              showOnHome: true,
+              notes: '奔赴新的一年，愿所有的美好与热烈如期而至！',
+              createdAt: Date.now() - 30 * 86400000,
+              updatedAt: Date.now(),
+            },
+          ]);
         }
       }
     }
@@ -514,10 +530,31 @@ app.delete('/api/v1/tasks/:id', authenticate, (req, res) => {
 // Countdown & Milestones Endpoints
 // ==========================================
 
+// Default initial countdown
+const DEFAULT_INITIAL_COUNTDOWNS: CountdownItem[] = [
+  {
+    id: 'cd_2027_new_year',
+    title: '2027 新年元旦',
+    targetDate: '2027-01-01',
+    startDate: '2026-01-01',
+    category: 'life',
+    isPinned: true,
+    showOnHome: true,
+    notes: '奔赴新的一年，愿所有的美好与热烈如期而至！',
+    createdAt: Date.now() - 30 * 86400000,
+    updatedAt: Date.now(),
+  },
+];
+
 // Get user countdowns
 app.get('/api/v1/countdowns', authenticate, (req, res) => {
   const username = (req as unknown as { currentUser: string }).currentUser;
-  const countdowns = userCountdowns.get(username) || [];
+  let countdowns = userCountdowns.get(username);
+  if (!countdowns || countdowns.length === 0) {
+    countdowns = [...DEFAULT_INITIAL_COUNTDOWNS];
+    userCountdowns.set(username, countdowns);
+    saveDb();
+  }
   res.json({ success: true, countdowns, serverTimestamp: Date.now() });
 });
 
@@ -542,6 +579,7 @@ app.post('/api/v1/countdowns/sync', authenticate, (req, res) => {
           ? c.category
           : 'other',
         isPinned: Boolean(c.isPinned),
+        showOnHome: Boolean(c.showOnHome),
         notes: c.notes ? String(c.notes) : '',
         milestones: Array.isArray(c.milestones)
           ? c.milestones

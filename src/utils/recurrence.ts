@@ -143,8 +143,9 @@ export function computeNextDueDate(
 
 /**
  * Checks if a task should be visible in the matrix based on its dueDate and advanceDays.
- * If advanceDays is defined (e.g. 15 for annual birthdays, 0 for daily journals),
- * the task remains hidden until (dueDate - today) <= advanceDays.
+ * If advanceDays is defined (e.g. 0 for 当天提醒, 15 for annual birthdays),
+ * the task remains hidden in the matrix until (dueDate - today) <= advanceDays.
+ * When advanceDays === 0 (当天提醒), it strictly only appears on the due date itself or when overdue.
  */
 export function isTaskVisibleInMatrix(task: Task, refDate: Date = new Date()): boolean {
   // Completed tasks are visible unless filtered by the hideCompleted toggle
@@ -152,8 +153,22 @@ export function isTaskVisibleInMatrix(task: Task, refDate: Date = new Date()): b
     return true;
   }
 
-  // Tasks without a dueDate or without advanceDays restriction are always visible
-  if (!task.dueDate || task.advanceDays === undefined || task.advanceDays === null) {
+  // Tasks without a dueDate are always visible
+  if (!task.dueDate) {
+    return true;
+  }
+
+  // Determine effective advance days:
+  // If explicitly specified on the task, use it (even if 0).
+  // For recurring tasks without explicit advanceDays, default to recurrence default (weekly/daily = 0, i.e. 当天提醒).
+  const effectiveAdvanceDays =
+    task.advanceDays !== undefined && task.advanceDays !== null
+      ? task.advanceDays
+      : task.recurrence && task.recurrence !== 'none'
+      ? (getDefaultAdvanceDays(task.recurrence) ?? 0)
+      : null;
+
+  if (effectiveAdvanceDays === null) {
     return true;
   }
 
@@ -167,8 +182,9 @@ export function isTaskVisibleInMatrix(task: Task, refDate: Date = new Date()): b
 
     const diffDays = Math.round((dueDay.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 
-    // If remaining days to due date is greater than the advance show threshold, hide it
-    if (diffDays > task.advanceDays) {
+    // If remaining days to due date is greater than the advance show threshold, hide it.
+    // e.g. effectiveAdvanceDays === 0: if diffDays > 0 (tomorrow or later), return false!
+    if (diffDays > effectiveAdvanceDays) {
       return false;
     }
   } catch {
@@ -182,7 +198,17 @@ export function isTaskVisibleInMatrix(task: Task, refDate: Date = new Date()): b
  * Get days remaining until task becomes visible in matrix
  */
 export function getDaysUntilVisible(task: Task, refDate: Date = new Date()): number {
-  if (!task.dueDate || task.advanceDays === undefined || task.advanceDays === null) {
+  if (!task.dueDate) {
+    return 0;
+  }
+  const effectiveAdvanceDays =
+    task.advanceDays !== undefined && task.advanceDays !== null
+      ? task.advanceDays
+      : task.recurrence && task.recurrence !== 'none'
+      ? (getDefaultAdvanceDays(task.recurrence) ?? 0)
+      : null;
+
+  if (effectiveAdvanceDays === null) {
     return 0;
   }
   try {
@@ -194,7 +220,7 @@ export function getDaysUntilVisible(task: Task, refDate: Date = new Date()): num
     dueDay.setHours(0, 0, 0, 0);
 
     const diffDays = Math.round((dueDay.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-    return Math.max(0, diffDays - task.advanceDays);
+    return Math.max(0, diffDays - effectiveAdvanceDays);
   } catch {
     return 0;
   }
@@ -243,10 +269,10 @@ export function getDefaultAdvanceDays(recurrence?: RecurrenceType | null): numbe
     case 'monthly':
       return 3;  // 每月任务默认提前3天显示
     case 'weekly':
-      return 1;  // 每周任务默认提前1天显示
+      return 0;  // 每周/工作日任务默认当天提醒与显示
     case 'daily':
-      return 0;  // 每日任务默认当天显示
+      return 0;  // 每日任务默认当天提醒与显示
     default:
-      return null;
+      return 0;  // 默认为当天提醒
   }
 }
